@@ -1,0 +1,236 @@
+{
+  "name": "lattice-context-manager",
+  "displayName": "Lattice Context Manager",
+  "description": "Visual dashboard to manage AI agent configurations (.claude/, .cursor/, .github/) across multiple repositories with sync detection, symlink sharing, and drag-and-drop operations",
+  "version": "0.1.0",
+  "publisher": "Jakoda",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jak0da/lattice"
+  },
+  "homepage": "https://github.com/jak0da/lattice",
+  "bugs": {
+    "url": "https://github.com/jak0da/lattice/issues"
+  },
+  "icon": "resources/logo.png",
+  "keywords": [
+    "claude", "claude-code", "ai", "configuration", "manager",
+    "skills", "commands", "agents", "rules", "dashboard",
+    "kanban", "sync", "dotclaude", "cursor", "windsurf",
+    "cline", "codex", "copilot", "mcp", "ai-agents"
+  ],
+  "galleryBanner": {
+    "color": "#0a0a0f",
+    "theme": "dark"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "bin": {
+    "lattice": "./dist/cli.js"
+  },
+  "contributes": {
+    "commands": [
+      {
+        "command": "lcm.copyToRepo",
+        "title": "LCM: Copy to Repo..."
+      },
+      {
+        "command": "lcm.moveToRepo",
+        "title": "LCM: Move to Repo..."
+      },
+      {
+        "command": "lcm.delete",
+        "title": "LCM: Delete"
+      },
+      {
+        "command": "lcm.diffWith",
+        "title": "LCM: Diff With..."
+      },
+      {
+        "command": "lcm.openFile",
+        "title": "LCM: Open File"
+      },
+      {
+        "command": "lcm.pushToAll",
+        "title": "LCM: Push to All Repos"
+      },
+      {
+        "command": "lcm.updateAllOutdated",
+        "title": "LCM: Update All Outdated Copies"
+      },
+      {
+        "command": "lcm.installToSelected",
+        "title": "LCM: Install to Selected Repos..."
+      },
+      {
+        "command": "lcm.refresh",
+        "title": "LCM: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "lcm.setAsSource",
+        "title": "LCM: Set as Source of Truth"
+      },
+      {
+        "command": "lcm.openDashboard",
+        "title": "LCM: Open Dashboard",
+        "icon": "$(layout)"
+      },
+      {
+        "command": "lcm.openProject",
+        "title": "LCM: Open Project"
+      },
+      {
+        "command": "lcm.importFromGithub",
+        "title": "Lattice: Import from GitHub URL..."
+      }
+    ],
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "lcm.openFile",
+          "when": "viewItem =~ /^asset/",
+          "group": "navigation@1"
+        },
+        {
+          "command": "lcm.diffWith",
+          "when": "viewItem =~ /^asset/",
+          "group": "navigation@2"
+        },
+        {
+          "command": "lcm.copyToRepo",
+          "when": "viewItem =~ /^asset/",
+          "group": "1_operations@1"
+        },
+        {
+          "command": "lcm.moveToRepo",
+          "when": "viewItem =~ /^asset/",
+          "group": "1_operations@2"
+        },
+        {
+          "command": "lcm.delete",
+          "when": "viewItem =~ /^asset/",
+          "group": "1_operations@3"
+        },
+        {
+          "command": "lcm.setAsSource",
+          "when": "viewItem =~ /^asset/",
+          "group": "2_sync@1"
+        },
+        {
+          "command": "lcm.pushToAll",
+          "when": "viewItem =~ /^asset/",
+          "group": "2_sync@2"
+        },
+        {
+          "command": "lcm.updateAllOutdated",
+          "when": "viewItem =~ /^assetGroup/",
+          "group": "2_sync@3"
+        },
+        {
+          "command": "lcm.installToSelected",
+          "when": "viewItem =~ /^asset/",
+          "group": "2_sync@4"
+        },
+        {
+          "command": "lcm.openProject",
+          "when": "viewItem == repo",
+          "group": "navigation@1"
+        },
+        {
+          "command": "lcm.openProject",
+          "when": "view == lcm.byRepo && viewItem =~ /^asset/",
+          "group": "navigation@3"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Lattice Context Manager",
+      "properties": {
+        "latticeContextManager.roots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Root directories to scan for repos with .claude/ folders (e.g. ~/Workplace)"
+        },
+        "latticeContextManager.maxDepth": {
+          "type": "number",
+          "default": 4,
+          "description": "Max directory depth when scanning for .claude/ folders"
+        },
+        "latticeContextManager.scanGlobal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include ~/.claude/ global configuration in the dashboard"
+        },
+        "latticeContextManager.canonicalPath": {
+          "type": "string",
+          "default": "~/.assets",
+          "description": "Canonical directory for shared assets when using symlink mode"
+        },
+        "latticeContextManager.installMode": {
+          "type": "string",
+          "enum": [
+            "copy",
+            "symlink"
+          ],
+          "default": "copy",
+          "description": "How assets are installed: 'copy' duplicates files, 'symlink' creates symbolic links to canonical location"
+        },
+        "latticeContextManager.ignoreDirs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "node_modules",
+            ".git",
+            "dist",
+            "build",
+            "vendor",
+            ".next",
+            ".nuxt",
+            "coverage",
+            ".dart_tool",
+            ".pub-cache"
+          ],
+          "description": "Directory names to skip during scanning"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run build",
+    "build": "node esbuild.config.mjs",
+    "watch": "node esbuild.config.mjs --watch",
+    "lint": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:unit": "node --import tsx --test --test-skip-pattern='CLI lifecycle' test/*.test.ts",
+    "test:e2e": "node --import tsx --test test/cli-e2e.test.ts",
+    "package": "npx @vscode/vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.20.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.3.0"
+  },
+  "dependencies": {
+    "highlight.js": "^11.11.1",
+    "lit": "^3.3.2",
+    "lucide-static": "^1.16.0",
+    "marked": "^18.0.3"
+  }
+}
