@@ -5,6 +5,14 @@
   "version": "0.1.0",
   "publisher": "jakoda",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jak0da/lattice"
+  },
+  "homepage": "https://github.com/jak0da/lattice",
+  "bugs": {
+    "url": "https://github.com/jak0da/lattice/issues"
+  },
   "icon": "resources/logo.png",
   "keywords": [
     "claude", "claude-code", "ai", "configuration", "manager",
