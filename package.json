@@ -3,7 +3,7 @@
   "displayName": "Lattice Context Manager",
   "description": "Visual dashboard to manage AI agent configurations (.claude/, .cursor/, .github/) across multiple repositories with sync detection, symlink sharing, and drag-and-drop operations",
   "version": "0.1.0",
-  "publisher": "jakoda",
+  "publisher": "Jakoda",
   "license": "MIT",
   "repository": {
     "type": "git",
