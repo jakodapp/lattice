@@ -5,6 +5,8 @@ node_modules/**
 .claude/**
 .e2e-workspace/**
 .github/**
+images/**
+.gitignore
 CLAUDE.md
 tsconfig.json
 esbuild.config.mjs
