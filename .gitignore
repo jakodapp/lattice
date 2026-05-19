@@ -4,3 +4,4 @@ dist/
 .vscode-test/
 .vscode/
 .e2e-workspace/
+*.DS_Store

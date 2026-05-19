@@ -61,7 +61,16 @@ export function activate(context: vscode.ExtensionContext) {
   const watcher = new Watcher(() => refresh());
   context.subscriptions.push(watcher);
 
+  let refreshRunning = false;
+  let refreshQueued = false;
+
   async function refresh() {
+    if (refreshRunning) {
+      refreshQueued = true;
+      return;
+    }
+    refreshRunning = true;
+
     const scanner = new Scanner(readVscodeConfig());
     statusBar.text = '$(sync~spin) LCM: Scanning...';
     statusBar.show();
@@ -69,16 +78,25 @@ export function activate(context: vscode.ExtensionContext) {
     try {
       store.repos = await scanner.scan();
       store.assetGroups = buildAssetGroups(store.repos.flatMap(r => r.assets));
-      watcher.watchRepos(store.repos);
 
-      // Show asset count for the current workspace project
+      // Only watch the current workspace's .claude/ folder — that's all the status bar needs.
+      // Global, canonical, and other repos are scanned on-demand (dashboard open, manual refresh).
       const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const currentRepo = workspacePath ? store.repos.find(r => r.path === workspacePath) : undefined;
+      watcher.watchRepos(currentRepo ? [currentRepo] : []);
+
       const localAssetCount = currentRepo ? currentRepo.assets.length : 0;
       statusBar.text = `$(layout) Lattice (${localAssetCount} assets)`;
     } catch (err) {
       statusBar.text = '$(error) LCM: Scan failed';
       vscode.window.showErrorMessage(`LCM scan failed: ${getErrorMessage(err)}`);
+    } finally {
+      refreshRunning = false;
+    }
+
+    if (refreshQueued) {
+      refreshQueued = false;
+      refresh();
     }
   }
 
