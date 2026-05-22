@@ -194,7 +194,8 @@ export function activate(context: vscode.ExtensionContext) {
 
 /** Ensure ~/.assets/.lattice/ git repo exists and context.json reflects current state */
 async function ensureLatticeStore(config: import('./services/config').LatticeConfig, store: ConfigStore): Promise<void> {
-  const canonicalExpanded = expandHome(config.canonicalPath);
+  const primaryCanonical = config.canonicalPaths[0];
+  const canonicalExpanded = expandHome(primaryCanonical);
   const latticeDir = path.join(canonicalExpanded, '.lattice');
 
   try {
@@ -205,11 +206,10 @@ async function ensureLatticeStore(config: import('./services/config').LatticeCon
     await writeCliConfigDirect({
       ...existing,
       roots: config.roots,
-      canonicalPath: config.canonicalPath,
+      canonicalPaths: config.canonicalPaths,
+      globalPaths: config.globalPaths,
       maxDepth: config.maxDepth,
       ignoreDirs: config.ignoreDirs,
-      scanGlobal: config.scanGlobal,
-      installMode: config.installMode,
     });
 
     const git = new LatticeGit(latticeDir);
@@ -217,7 +217,7 @@ async function ensureLatticeStore(config: import('./services/config').LatticeCon
 
     const ctx = new ContextStore(latticeDir);
     await ctx.load();
-    ctx.buildFromScan(store.repos, config.canonicalPath);
+    ctx.buildFromScan(store.repos, primaryCanonical);
 
     const changed = await ctx.save();
 

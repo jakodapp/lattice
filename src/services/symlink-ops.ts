@@ -5,7 +5,8 @@ import { CcmError } from '../errors';
 import { getTargetPath } from './path-resolver';
 
 import { expandHome } from './config';
-import type { InstallMode } from './config';
+
+export type InstallMode = 'copy' | 'symlink';
 
 export interface InstallResult {
   mode: InstallMode;
@@ -14,10 +15,14 @@ export interface InstallResult {
   symlinkFailed?: boolean;
 }
 
-/** Check if a path is within the configured canonical directory */
-export function isCanonicalPath(assetPath: string, canonicalBase: string): boolean {
-  const resolved = path.resolve(expandHome(canonicalBase));
-  return path.resolve(assetPath).startsWith(resolved + path.sep) || path.resolve(assetPath) === resolved;
+/** Check if a path is within any of the configured canonical directories */
+export function isCanonicalPath(assetPath: string, canonicalBases: string | string[]): boolean {
+  const bases = Array.isArray(canonicalBases) ? canonicalBases : [canonicalBases];
+  const resolvedAsset = path.resolve(assetPath);
+  return bases.some(base => {
+    const resolved = path.resolve(expandHome(base));
+    return resolvedAsset.startsWith(resolved + path.sep) || resolvedAsset === resolved;
+  });
 }
 
 /** Check if a target path is already a symlink pointing to the expected canonical location */
@@ -73,46 +78,42 @@ export async function createRelativeSymlink(targetPath: string, linkPath: string
 /**
  * Install an asset to a target repo.
  *
- * If mode is 'symlink' AND the source asset lives in the canonical directory,
- * creates a symlink from target to source. Otherwise falls back to copy.
- *
- * If mode is 'copy', uses normal file copy (existing behavior).
+ * Automatically decides the install strategy based on the source:
+ * - Source is in a canonical directory → create symlink
+ * - Otherwise → copy the files
  */
 export async function installAsset(
   asset: Asset,
   targetRepo: Repo,
-  options: { mode?: InstallMode; canonicalBase?: string; copyFn?: (a: Asset, r: Repo) => Promise<string> } = {},
+  options: { canonicalBase?: string | string[]; copyFn?: (a: Asset, r: Repo) => Promise<string> } = {},
 ): Promise<InstallResult> {
-  const mode = options.mode ?? 'copy';
-  const canonicalBase = options.canonicalBase ? expandHome(options.canonicalBase) : '';
+  const canonicalBases = options.canonicalBase
+    ? (Array.isArray(options.canonicalBase) ? options.canonicalBase : [options.canonicalBase])
+    : [];
   const targetPath = getTargetPath(asset, targetRepo);
   if (!options.copyFn) {
     throw new CcmError('installAsset requires copyFn option', 'MISSING_COPY_FN', {});
   }
   const doCopy = options.copyFn;
 
-  // Copy mode — use existing behavior
-  if (mode === 'copy') {
-    await doCopy(asset, targetRepo);
-    return { mode: 'copy', targetPath };
-  }
+  // Resolve canonical source — symlinked assets point back to their origin
+  const sourcePath = asset.canonicalPath ?? asset.path;
+  const shouldSymlink = canonicalBases.length > 0 && isCanonicalPath(sourcePath, canonicalBases);
 
-  // Symlink mode — check if source is in canonical path
-  if (!canonicalBase || !isCanonicalPath(asset.path, canonicalBase)) {
-    // Source is not in canonical dir — fall back to copy
+  if (!shouldSymlink) {
     await doCopy(asset, targetRepo);
     return { mode: 'copy', targetPath };
   }
 
   // Check if target already has correct symlink
-  if (await isCanonicalSymlink(targetPath, asset.path)) {
-    return { mode: 'symlink', targetPath, canonicalPath: asset.path };
+  if (await isCanonicalSymlink(targetPath, sourcePath)) {
+    return { mode: 'symlink', targetPath, canonicalPath: sourcePath };
   }
 
   // Create symlink
-  const created = await createRelativeSymlink(asset.path, targetPath);
+  const created = await createRelativeSymlink(sourcePath, targetPath);
   if (created) {
-    return { mode: 'symlink', targetPath, canonicalPath: asset.path };
+    return { mode: 'symlink', targetPath, canonicalPath: sourcePath };
   }
 
   // Symlink failed — fall back to copy

@@ -13,7 +13,7 @@ import * as path from 'path';
 
 export async function syncCommand(config: LatticeConfig, args: string[]): Promise<void> {
   const assetName = args[0];
-  const latticeDir = getLatticeDir(config.canonicalPath);
+  const latticeDir = getLatticeDir(config.canonicalPaths[0]);
   const store = new ContextStore(latticeDir);
   await store.load();
 
@@ -33,7 +33,7 @@ export async function syncCommand(config: LatticeConfig, args: string[]): Promis
   }
 
   output.heading(`Syncing ${toSync.length} asset(s) from GitHub`);
-  const expandedCanonical = expandHome(config.canonicalPath);
+  const expandedCanonical = expandHome(config.canonicalPaths[0]);
   const git = new LatticeGit(latticeDir);
   await git.ensureRepo();
   let updated = 0;

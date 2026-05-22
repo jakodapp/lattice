@@ -3,7 +3,7 @@ import * as path from 'path';
 import { expandHome, DEFAULT_CONFIG } from '../services/config';
 import type { LatticeConfig } from '../services/config';
 
-/** Resolve the .lattice directory path from the canonical path */
+/** Resolve the .lattice directory path from the primary canonical path */
 export function getLatticeDir(canonicalPath: string): string {
   return path.join(expandHome(canonicalPath), '.lattice');
 }
@@ -14,10 +14,19 @@ export function getLatticeDir(canonicalPath: string): string {
  */
 export async function loadCliConfig(): Promise<LatticeConfig> {
   const envConfig = process.env.LATTICE_CONFIG;
-  const configPath = envConfig ?? path.join(getLatticeDir(DEFAULT_CONFIG.canonicalPath), 'config.json');
+  const configPath = envConfig ?? path.join(getLatticeDir(DEFAULT_CONFIG.canonicalPaths[0]), 'config.json');
   try {
     const raw = await fs.readFile(configPath, 'utf-8');
     const parsed = JSON.parse(raw) as Partial<LatticeConfig>;
+    // Backwards compat: migrate legacy fields
+    const legacy = parsed as Record<string, unknown>;
+    if (typeof legacy['canonicalPath'] === 'string' && !parsed.canonicalPaths) {
+      const legacyPath = legacy['canonicalPath'] as string;
+      parsed.canonicalPaths = [legacyPath, ...DEFAULT_CONFIG.canonicalPaths.filter(p => p !== legacyPath)];
+    }
+    if (typeof legacy['scanGlobal'] === 'boolean' && !parsed.globalPaths) {
+      parsed.globalPaths = legacy['scanGlobal'] ? DEFAULT_CONFIG.globalPaths : [];
+    }
     return { ...DEFAULT_CONFIG, ...parsed };
   } catch {
     return { ...DEFAULT_CONFIG };
@@ -45,7 +54,7 @@ export function mergeLatticeConfig(
 
 /** Save CLI config, preserving lattice-managed fields from existing file */
 export async function saveCliConfig(config: LatticeConfig): Promise<void> {
-  const latticeDir = getLatticeDir(config.canonicalPath);
+  const latticeDir = getLatticeDir(config.canonicalPaths[0]);
   await fs.mkdir(latticeDir, { recursive: true });
   const configPath = path.join(latticeDir, 'config.json');
 
@@ -62,7 +71,7 @@ export async function saveCliConfig(config: LatticeConfig): Promise<void> {
 /** Write config directly without re-reading/merging. Use when the caller
  *  has already loaded and modified the config (e.g. ensureLatticeStore). */
 export async function writeCliConfigDirect(config: LatticeConfig): Promise<void> {
-  const latticeDir = getLatticeDir(config.canonicalPath);
+  const latticeDir = getLatticeDir(config.canonicalPaths[0]);
   await fs.mkdir(latticeDir, { recursive: true });
   const configPath = path.join(latticeDir, 'config.json');
   await fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');

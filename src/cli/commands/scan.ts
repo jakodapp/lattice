@@ -16,10 +16,10 @@ export async function scanCommand(config: LatticeConfig): Promise<void> {
   const scanner = new Scanner(config);
   const repos = await scanner.scan();
 
-  const latticeDir = getLatticeDir(config.canonicalPath);
+  const latticeDir = getLatticeDir(config.canonicalPaths[0]);
   const store = new ContextStore(latticeDir);
   await store.load();
-  store.buildFromScan(repos, config.canonicalPath);
+  store.buildFromScan(repos, config.canonicalPaths[0]);
   const changed = await store.save();
 
   const git = new LatticeGit(latticeDir);
@@ -31,10 +31,10 @@ export async function scanCommand(config: LatticeConfig): Promise<void> {
 
   output.heading('Repositories');
   const normalRepos = repos.filter(r => !r.isCanonical && !r.isGlobal);
-  const canonical = repos.find(r => r.isCanonical);
+  const canonicals = repos.filter(r => r.isCanonical);
   const global = repos.find(r => r.isGlobal);
 
-  if (canonical) {
+  for (const canonical of canonicals) {
     output.success(`${canonical.name} — ${canonical.assets.length} assets`);
   }
   if (global) {
