@@ -6,7 +6,6 @@ import { installAsset } from './symlink-ops';
 import { copyAsset } from './file-ops';
 import { enumerateAssetDir } from './asset-enumerator';
 import { SKILL_MD } from '../constants';
-import type { InstallMode } from './config';
 
 export interface DiscoveredAsset {
   name: string;
@@ -113,7 +112,7 @@ async function readPreview(filePath: string): Promise<string> {
 export async function installDiscoveredAssets(
   assets: DiscoveredAsset[],
   targetRepos: Repo[],
-  options: { mode: InstallMode; canonicalBase: string },
+  options: { canonicalBase: string | string[] },
 ): Promise<number> {
   let successCount = 0;
 
@@ -131,7 +130,7 @@ export async function installDiscoveredAssets(
 
     for (const repo of targetRepos) {
       try {
-        await installAsset(tempAsset, repo, { mode: options.mode, canonicalBase: options.canonicalBase, copyFn: copyAsset });
+        await installAsset(tempAsset, repo, { canonicalBase: options.canonicalBase, copyFn: copyAsset });
         successCount++;
       } catch { /* continue with next */ }
     }

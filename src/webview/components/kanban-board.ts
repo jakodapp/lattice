@@ -3,17 +3,6 @@ import { customElement, property, state } from 'lit/decorators.js';
 import { SerializedAsset, SerializedRepo, ViewMode, AssetType, ASSET_TYPE_LABELS, HIDDEN_ASSET_TYPES, ASSET_TYPE_ORDER } from '../types';
 import { iconWarning } from '../icons';
 import './kanban-column';
-import './drop-menu';
-
-interface DropMenuState {
-  visible: boolean;
-  x: number;
-  y: number;
-  asset: SerializedAsset | null;
-  targetRepoName: string;
-  /** true if the target already has an asset with the same name+type */
-  assetExists: boolean;
-}
 
 @customElement('kanban-board')
 export class KanbanBoard extends LitElement {
@@ -21,7 +10,6 @@ export class KanbanBoard extends LitElement {
   @property({ type: String }) view: ViewMode = 'repo';
   @property({ type: String }) searchQuery = '';
   @property({ type: String }) selectedRepoName = '';
-  @state() private _dropMenu: DropMenuState = { visible: false, x: 0, y: 0, asset: null, targetRepoName: '', assetExists: false };
   @state() private _typeFilter: AssetType | '' = '';
 
   /** Compute set of asset keys (type::name) that have diverged hashes across repos */
@@ -206,19 +194,9 @@ export class KanbanBoard extends LitElement {
     }
     const columns = this._renderByRepo();
     return html`
-      <div class="board" @click="${this._dismissDropMenu}">
+      <div class="board">
         ${columns}
       </div>
-      <drop-menu
-        .visible="${this._dropMenu.visible}"
-        .x="${this._dropMenu.x}"
-        .y="${this._dropMenu.y}"
-        .assetExists="${this._dropMenu.assetExists}"
-        .isInstall="${this._dropMenu.asset?.isCanonical || this._dropMenu.asset?.isSymlink || false}"
-        @drop-copy="${this._onDropCopy}"
-        @drop-replace="${this._onDropReplace}"
-        @drop-dismiss="${this._dismissDropMenu}"
-      ></drop-menu>
     `;
   }
 
@@ -375,44 +353,14 @@ export class KanbanBoard extends LitElement {
 
 
 
-  /** Called when an asset is dropped on a column, with mouse coordinates */
+  /** Called when an asset is dropped on a column — executes immediately without context menu */
   private _onAssetDropAt(e: CustomEvent<{ asset: SerializedAsset; targetRepoName: string; x: number; y: number }>) {
-    const { asset, targetRepoName, x, y } = e.detail;
-    if (asset.repoName === targetRepoName) {return;}
+    const { asset, targetRepoName } = e.detail;
+    if (asset.repoName === targetRepoName) { return; }
 
-    // Check if asset already exists in target repo
-    const targetRepo = this.repos.find(r => r.name === targetRepoName);
-    const assetExists = targetRepo?.assets.some(
-      a => a.type === asset.type && a.name === asset.name
-    ) ?? false;
-
-    this._dropMenu = { visible: true, x, y, asset, targetRepoName, assetExists };
-  }
-
-  private _onDropCopy() {
-    if (this._dropMenu.asset) {
-      this.dispatchEvent(new CustomEvent('asset-drop', {
-        detail: { asset: this._dropMenu.asset, targetRepoName: this._dropMenu.targetRepoName, action: 'copy' },
-        bubbles: true, composed: true,
-      }));
-    }
-    this._dismissDropMenu();
-  }
-
-  private _onDropReplace() {
-    if (this._dropMenu.asset) {
-      this.dispatchEvent(new CustomEvent('asset-drop', {
-        detail: { asset: this._dropMenu.asset, targetRepoName: this._dropMenu.targetRepoName, action: 'replace' },
-        bubbles: true, composed: true,
-      }));
-    }
-    this._dismissDropMenu();
-  }
-
-
-  private _dismissDropMenu() {
-    if (this._dropMenu.visible) {
-      this._dropMenu = { ...this._dropMenu, visible: false };
-    }
+    this.dispatchEvent(new CustomEvent('asset-drop', {
+      detail: { asset, targetRepoName, action: 'copy' },
+      bubbles: true, composed: true,
+    }));
   }
 }

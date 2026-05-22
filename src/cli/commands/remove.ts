@@ -56,10 +56,10 @@ export async function removeCommand(config: LatticeConfig, args: string[]): Prom
     output.success(`Removed ${repo.assets.length} assets from ${repo.name}`);
   }
 
-  const latticeDir = getLatticeDir(config.canonicalPath);
+  const latticeDir = getLatticeDir(config.canonicalPaths[0]);
   const store = new ContextStore(latticeDir);
   await store.load();
-  store.buildFromScan(await scanner.scan(), config.canonicalPath);
+  store.buildFromScan(await scanner.scan(), config.canonicalPaths[0]);
   await store.save();
 
   const git = new LatticeGit(latticeDir);

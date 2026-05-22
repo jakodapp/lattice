@@ -5,8 +5,8 @@ import { Asset, Repo } from '../types';
 import { SKILL_MD, CLAUDE_MD, SETTINGS_JSON, SETTINGS_LOCAL_JSON, THUMBS_DB, getErrorMessage, truncatePreview, displayHash } from '../constants';
 import { copyAsset, deleteAsset } from '../services/file-ops';
 import { installAsset } from '../services/symlink-ops';
+import { isSymlinkToDir } from '../services/fs-utils';
 import { expandHome } from '../services/config';
-import type { InstallMode } from '../services/config';
 import { copyAssetToRepos, moveAssetToRepo, installCanonicalToRepos, deleteCanonicalAsset, findAffectedSymlinks, getDeleteWarning } from '../services/asset-operations';
 import { showResult } from '../vscode-adapter';
 import { ContextStore } from '../services/context-store';
@@ -236,12 +236,13 @@ export class DashboardPanel {
   /** Update context.json and auto-commit after any mutating operation */
   private async _trackChange(commitMessage: string): Promise<void> {
     const { canonicalBase } = this._getInstallOptions();
-    const expanded = expandHome(canonicalBase);
+    const primaryBase = canonicalBase[0];
+    const expanded = expandHome(primaryBase);
     const latticeDir = path.join(expanded, '.lattice');
     try {
       const store = new ContextStore(latticeDir);
       await store.load();
-      store.buildFromScan(this._store.repos, canonicalBase);
+      store.buildFromScan(this._store.repos, primaryBase);
       const changed = await store.save();
       if (changed) {
         const git = new LatticeGit(latticeDir);
@@ -260,7 +261,7 @@ export class DashboardPanel {
     commitHash: string,
   ): Promise<void> {
     const { canonicalBase } = this._getInstallOptions();
-    const expanded = expandHome(canonicalBase);
+    const expanded = expandHome(canonicalBase[0]);
     const latticeDir = path.join(expanded, '.lattice');
     try {
       const store = new ContextStore(latticeDir);
@@ -285,11 +286,10 @@ export class DashboardPanel {
     }
   }
 
-  private _getInstallOptions(): { mode: InstallMode; canonicalBase: string; copyFn: typeof copyAsset } {
+  private _getInstallOptions(): { canonicalBase: string[]; copyFn: typeof copyAsset } {
     const config = vscode.workspace.getConfiguration('latticeContextManager');
     return {
-      mode: config.get<InstallMode>('installMode', 'copy'),
-      canonicalBase: config.get<string>('canonicalPath', '~/.assets'),
+      canonicalBase: config.get<string[]>('canonicalPaths', ['~/.assets', '~/.agents']),
       copyFn: copyAsset,
     };
   }
@@ -476,7 +476,8 @@ export class DashboardPanel {
     if (isSkillDir) {
       for (const item of items) {
         const itemPath = path.join(dirPath, item.name);
-        if (item.isDirectory() || item.isSymbolicLink()) {
+        const isDir = item.isDirectory() || (item.isSymbolicLink() && await isSymlinkToDir(itemPath));
+        if (isDir) {
           const skillMdPath = path.join(itemPath, SKILL_MD);
           try {
             const content = await fs.readFile(skillMdPath, 'utf-8');
@@ -486,7 +487,7 @@ export class DashboardPanel {
             const nested = await this._readAssetDir(itemPath, true);
             entries.push(...nested);
           }
-        } else if (item.isFile() && (item.name.endsWith('.md') || item.name.endsWith('.js'))) {
+        } else if ((item.isFile() || item.isSymbolicLink()) && (item.name.endsWith('.md') || item.name.endsWith('.js'))) {
           const content = await fs.readFile(itemPath, 'utf-8');
           const name = item.name.replace(/\.(md|js)$/, '');
           entries.push({ name, path: itemPath, preview: truncatePreview(content) });
@@ -495,7 +496,8 @@ export class DashboardPanel {
     } else {
       for (const item of items) {
         const itemPath = path.join(dirPath, item.name);
-        if (item.isFile()) {
+        const isDir = item.isDirectory() || (item.isSymbolicLink() && await isSymlinkToDir(itemPath));
+        if (item.isFile() || (item.isSymbolicLink() && !isDir)) {
           try {
             const content = await fs.readFile(itemPath, 'utf-8');
             const name = item.name.replace(/\.(md|js)$/, '');
@@ -503,7 +505,7 @@ export class DashboardPanel {
           } catch {
             entries.push({ name: item.name, path: itemPath, preview: '(Unable to read)' });
           }
-        } else if (item.isDirectory()) {
+        } else if (isDir) {
           const nested = await this._readNestedFiles(itemPath, item.name);
           entries.push(...nested);
         }
@@ -711,11 +713,16 @@ export class DashboardPanel {
   }
 
   private async _handleInstallCanonical(msg: Extract<ToExtension, { type: 'install-canonical' }>) {
-    const canonicalRepo = this._store.repos.find(r => r.isCanonical);
-    const asset = canonicalRepo?.assets.find(a => a.path === msg.assetPath);
-    if (!asset || !canonicalRepo) return;
+    const canonicalRepos = this._store.repos.filter(r => r.isCanonical);
+    let asset: Asset | undefined;
+    for (const cr of canonicalRepos) {
+      asset = cr.assets.find(a => a.path === msg.assetPath);
+      if (asset) break;
+    }
+    if (!asset) return;
     const targets = msg.targetRepoNames.map(n => this._store.repos.find(r => r.name === n)).filter((r): r is import('../types').Repo => !!r);
-    const result = await installCanonicalToRepos(asset, targets, canonicalRepo.path);
+    const canonicalBases = canonicalRepos.map(r => r.path);
+    const result = await installCanonicalToRepos(asset, targets, canonicalBases);
     showResult(result);
     await this._onRefresh();
     this.refresh();
@@ -723,8 +730,11 @@ export class DashboardPanel {
   }
 
   private async _handleDeleteCanonical(msg: Extract<ToExtension, { type: 'delete-canonical' }>) {
-    const canonicalRepo = this._store.repos.find(r => r.isCanonical);
-    const asset = canonicalRepo?.assets.find(a => a.path === msg.assetPath);
+    let asset: Asset | undefined;
+    for (const cr of this._store.repos.filter(r => r.isCanonical)) {
+      asset = cr.assets.find(a => a.path === msg.assetPath);
+      if (asset) break;
+    }
     if (!asset) return;
 
     const affected = findAffectedSymlinks(asset, this._store.repos);
@@ -909,7 +919,7 @@ export class DashboardPanel {
   private async _executeConvert(sourceAsset: Asset, allInstances: Asset[]) {
     const { canonicalBase } = this._getInstallOptions();
     try {
-      const result = await convertToSymlink(sourceAsset, allInstances, canonicalBase);
+      const result = await convertToSymlink(sourceAsset, allInstances, canonicalBase[0]);
       const msg = result.failedRepos.length > 0
         ? `Converted to symlink in ${result.convertedRepos.length} repo(s). Failed: ${result.failedRepos.join(', ')}`
         : `Converted to symlink in ${result.convertedRepos.length} repo(s).`;
@@ -993,7 +1003,7 @@ export class DashboardPanel {
   /** Commit config.json changes directly (bypasses context.json change gate) */
   private async _commitConfigChange(commitMessage: string): Promise<void> {
     const { canonicalBase } = this._getInstallOptions();
-    const expanded = expandHome(canonicalBase);
+    const expanded = expandHome(canonicalBase[0]);
     const latticeDir = path.join(expanded, '.lattice');
     try {
       const git = new LatticeGit(latticeDir);

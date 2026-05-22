@@ -1,4 +1,3 @@
-import { expandHome } from '../../services/config';
 import type { LatticeConfig } from '../../services/config';
 import { Scanner } from '../../services/scanner';
 import { moveAssetToRepo } from '../../services/asset-operations';
@@ -33,10 +32,8 @@ export async function moveCommand(config: LatticeConfig, args: string[]): Promis
     process.exit(1);
   }
 
-  const expandedCanonical = expandHome(config.canonicalPath);
   const result = await moveAssetToRepo(asset, targetRepo, {
-    mode: config.installMode,
-    canonicalBase: expandedCanonical,
+    canonicalBase: config.canonicalPaths,
   });
 
   if (result.ok) {
@@ -45,10 +42,10 @@ export async function moveCommand(config: LatticeConfig, args: string[]): Promis
     output.error(result.message);
   }
 
-  const latticeDir = getLatticeDir(config.canonicalPath);
+  const latticeDir = getLatticeDir(config.canonicalPaths[0]);
   const store = new ContextStore(latticeDir);
   await store.load();
-  store.buildFromScan(await scanner.scan(), config.canonicalPath);
+  store.buildFromScan(await scanner.scan(), config.canonicalPaths[0]);
   await store.save();
 
   const git = new LatticeGit(latticeDir);

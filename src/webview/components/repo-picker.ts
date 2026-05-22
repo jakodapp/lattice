@@ -8,6 +8,7 @@ export class RepoPicker extends LitElement {
   @property({ type: String }) action: 'copy' | 'move' | 'install' = 'copy';
   @property({ type: Object }) asset: SerializedAsset | null = null;
   @property({ type: Array }) repos: SerializedRepo[] = [];
+  @property({ type: Boolean }) includeCanonical = false;
   @state() private _selected = new Set<string>();
 
   static styles = css`
@@ -242,8 +243,10 @@ export class RepoPicker extends LitElement {
     const actionLabel = this.action === 'copy' ? 'Copy' : this.action === 'move' ? 'Move' : 'Install';
     const isSingleSelect = this.action === 'move';
 
-    // Include all repos except canonical — source repo shown but disabled
-    const pickable = this.repos.filter(r => !r.isCanonical);
+    // Include canonical repos when explicitly enabled (e.g. GitHub import flow)
+    const pickable = this.includeCanonical
+      ? this.repos
+      : this.repos.filter(r => !r.isCanonical);
 
     const count = this._selected.size;
     const confirmLabel = isSingleSelect
@@ -272,7 +275,9 @@ export class RepoPicker extends LitElement {
                       <div class="repo-card ${selected ? 'selected' : ''} ${isDisabled ? 'disabled' : ''}" @click="${() => !isDisabled && this._toggle(repo.name, isSingleSelect)}">
                         ${!isDisabled ? html`<input type="checkbox" class="repo-checkbox" .checked="${selected}" tabindex="-1" />` : ''}
                         <div class="repo-name" title="${repo.name}">${repo.name}</div>
-                        ${repo.agents && repo.agents.length > 0 ? html`
+                        ${repo.isCanonical ? html`
+                          <div class="repo-agents"><span class="agent-pill" style="background:rgba(0,128,255,0.18);color:#4fa3ff;">CANONICAL</span></div>
+                        ` : repo.agents && repo.agents.length > 0 ? html`
                           <div class="repo-agents">
                             ${repo.agents.map(a => html`<span class="agent-pill">${a}</span>`)}
                           </div>

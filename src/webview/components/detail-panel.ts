@@ -6,7 +6,7 @@ import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
 import json from 'highlight.js/lib/languages/json';
 import { FileEntry, FileGroup, SerializedRepo } from '../types';
-import { iconExternal, iconCopy, iconTrash } from '../icons';
+import { iconExternal, iconCopy, iconTrash, iconLink } from '../icons';
 
 hljs.registerLanguage('javascript', javascript);
 hljs.registerLanguage('json', json);
@@ -307,6 +307,13 @@ export class DetailPanel extends LitElement {
       text-overflow: ellipsis;
       white-space: nowrap;
       font-family: var(--vscode-editor-font-family, 'Menlo, Monaco, monospace');
+    }
+
+    .symlink-icon {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+      opacity: 0.5;
     }
 
     .file-row::after {
@@ -715,6 +722,7 @@ export class DetailPanel extends LitElement {
                   <div class="file-item">
                     <div class="file-row" data-group="${groupKey}" @click="${() => this._navigateToFile(entry)}" @contextmenu="${(e: MouseEvent) => this._onFileContextMenu(e, entry)}">
                       <span class="file-name">${entry.name}</span>
+                      ${this._isSymlink(entry) ? iconLink('symlink-icon') : ''}
                     </div>
                   </div>
                 `)}
@@ -941,6 +949,7 @@ export class DetailPanel extends LitElement {
                 <div class="file-item">
                   <div class="file-row ${this._viewingFile?.name === entry.name ? 'active' : ''}" data-group="${groupKey}" @click="${() => this._navigateToFile(entry)}" @contextmenu="${(e: MouseEvent) => this._onFileContextMenu(e, entry)}">
                     <span class="file-name">${entry.name}</span>
+                    ${this._isSymlink(entry) ? iconLink('symlink-icon') : ''}
                   </div>
                 </div>
               `)}
@@ -1082,6 +1091,12 @@ export class DetailPanel extends LitElement {
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  /** Check if a file entry corresponds to a symlinked asset */
+  private _isSymlink(entry: FileEntry): boolean {
+    if (!this.repo) return false;
+    return this.repo.assets.some(a => a.isSymlink && (a.path === entry.path || entry.path.startsWith(a.path + '/')));
   }
 
   // --- Navigation ---
