@@ -2,6 +2,7 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import type { AssetType } from '../types';
 import { SKILL_MD, THUMBS_DB } from '../constants';
+import { isSymlinkToDir } from './fs-utils';
 
 /** Raw enumerated item — callers enrich with hashing, symlink detection, or previews */
 export interface EnumeratedItem {
@@ -67,13 +68,4 @@ export async function enumerateAssetDir(
   }
 
   return items;
-}
-
-async function isSymlinkToDir(fullPath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(fullPath);
-    return stat.isDirectory();
-  } catch {
-    return false;
-  }
 }

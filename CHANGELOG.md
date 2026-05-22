@@ -2,6 +2,28 @@
 
 All notable changes to the Lattice Context Manager extension will be documented in this file.
 
+## [0.1.2] - 2026-05-22
+
+### Added
+- Multiple canonical paths support — `canonicalPaths` setting defaults to `['~/.assets', '~/.agents']`
+- Multiple global agent paths — `globalPaths` setting defaults to `['~/.claude', '~/.cursor', '~/.github']`
+- Canonical repos shown as install targets during GitHub imports with "CANONICAL" badge
+- Chain icon on symlinked assets in the detail panel file list
+- Blob URL support for GitHub imports (`/blob/main/.../SKILL.md` now accepted alongside `/tree/`)
+- Shared `fs-utils.ts` module for symlink-aware filesystem helpers
+
+### Changed
+- `canonicalPath` (string) replaced by `canonicalPaths` (string array) — backwards-compatible migration for existing configs
+- `scanGlobal` (boolean) replaced by `globalPaths` (string array) — empty array disables global scanning
+- `installMode` setting removed — install strategy is now automatic: canonical source creates symlink, everything else copies
+- Settings reordered with `order` property: roots, globalPaths, canonicalPaths, maxDepth, ignoreDirs
+
+### Fixed
+- Symlinked asset directories (e.g. `~/.claude/skills -> ~/.cursor/skills`) not detected by scanner on WSL
+- Symlinked files skipped in detail panel file list (`Dirent.isFile()` returns false for symlinks)
+- GitHub import rejecting `/blob/` URLs — only `/tree/` was accepted
+- `SKILL.md` filename not stripped from blob URL subpaths, causing failed skill discovery
+
 ## [0.1.1] - 2026-05-22
 
 ### Added

@@ -2,7 +2,7 @@
   "name": "lattice-context-manager",
   "displayName": "Lattice Context Manager",
   "description": "Visual dashboard to manage AI agent configurations (.claude/, .cursor/, .github/) across multiple repositories with sync detection, symlink sharing, and drag-and-drop operations",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "Jakoda",
   "license": "MIT",
   "repository": {
@@ -173,6 +173,7 @@
       "title": "Lattice Context Manager",
       "properties": {
         "latticeContextManager.roots": {
+          "order": 1,
           "type": "array",
           "items": {
             "type": "string"
@@ -180,31 +181,39 @@
           "default": [],
           "description": "Root directories to scan for repos with .claude/ folders (e.g. ~/Workplace)"
         },
+        "latticeContextManager.globalPaths": {
+          "order": 2,
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "~/.claude",
+            "~/.cursor",
+            "~/.github"
+          ],
+          "description": "Global agent config directories to include in the dashboard (remove entries to disable)"
+        },
+        "latticeContextManager.canonicalPaths": {
+          "order": 3,
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "~/.assets",
+            "~/.agents"
+          ],
+          "description": "Canonical directories for shared assets (first is primary for symlink mode and context tracking)"
+        },
         "latticeContextManager.maxDepth": {
+          "order": 4,
           "type": "number",
           "default": 4,
           "description": "Max directory depth when scanning for .claude/ folders"
         },
-        "latticeContextManager.scanGlobal": {
-          "type": "boolean",
-          "default": true,
-          "description": "Include ~/.claude/ global configuration in the dashboard"
-        },
-        "latticeContextManager.canonicalPath": {
-          "type": "string",
-          "default": "~/.assets",
-          "description": "Canonical directory for shared assets when using symlink mode"
-        },
-        "latticeContextManager.installMode": {
-          "type": "string",
-          "enum": [
-            "copy",
-            "symlink"
-          ],
-          "default": "copy",
-          "description": "How assets are installed: 'copy' duplicates files, 'symlink' creates symbolic links to canonical location"
-        },
         "latticeContextManager.ignoreDirs": {
+          "order": 5,
           "type": "array",
           "items": {
             "type": "string"

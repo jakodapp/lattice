@@ -18,16 +18,20 @@ export async function installCommand(config: LatticeConfig, args: string[]): Pro
 
   const scanner = new Scanner(config);
   const repos = await scanner.scan();
-  const canonicalRepo = repos.find(r => r.isCanonical);
+  const canonicalRepos = repos.filter(r => r.isCanonical);
 
-  if (!canonicalRepo) {
-    output.error('No canonical path found. Check latticeContextManager.canonicalPath setting.');
+  if (canonicalRepos.length === 0) {
+    output.error('No canonical paths found. Check latticeContextManager.canonicalPaths setting.');
     process.exit(1);
   }
 
-  const asset = canonicalRepo.assets.find(a => a.name === assetName);
+  let asset: import('../../types').Asset | undefined;
+  for (const cr of canonicalRepos) {
+    asset = cr.assets.find(a => a.name === assetName);
+    if (asset) break;
+  }
   if (!asset) {
-    output.error(`Asset "${assetName}" not found in canonical path`);
+    output.error(`Asset "${assetName}" not found in canonical paths`);
     process.exit(1);
   }
 
@@ -37,7 +41,8 @@ export async function installCommand(config: LatticeConfig, args: string[]): Pro
     process.exit(1);
   }
 
-  const result = await installCanonicalToRepos(asset, targetRepos, canonicalRepo.path);
+  const canonicalBases = canonicalRepos.map(r => r.path);
+  const result = await installCanonicalToRepos(asset, targetRepos, canonicalBases);
 
   if (result.ok) {
     output.success(result.message);
@@ -45,10 +50,10 @@ export async function installCommand(config: LatticeConfig, args: string[]): Pro
     output.error(result.message);
   }
 
-  const latticeDir = getLatticeDir(config.canonicalPath);
+  const latticeDir = getLatticeDir(config.canonicalPaths[0]);
   const store = new ContextStore(latticeDir);
   await store.load();
-  store.buildFromScan(await scanner.scan(), config.canonicalPath);
+  store.buildFromScan(await scanner.scan(), config.canonicalPaths[0]);
   await store.save();
 
   const git = new LatticeGit(latticeDir);

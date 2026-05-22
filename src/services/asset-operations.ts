@@ -3,7 +3,6 @@ import { getErrorMessage } from '../constants';
 import { deleteAsset } from './file-ops';
 import { installAsset } from './symlink-ops';
 import { copyAsset } from './file-ops';
-import type { InstallMode } from './config';
 import { isContextFile } from '../webview/types';
 import type { OperationResult } from './result';
 
@@ -54,15 +53,14 @@ export function getDeleteWarning(opts: {
 }
 
 interface InstallOptions {
-  mode: InstallMode;
-  canonicalBase: string;
+  canonicalBase: string | string[];
 }
 
 /** Install an asset to multiple repos, collecting results */
 async function installToMultipleRepos(
   asset: Asset,
   targetRepos: Repo[],
-  options: { mode: InstallMode; canonicalBase: string },
+  options: { canonicalBase: string | string[] },
   verb: string,
 ): Promise<OperationResult<{ successCount: number }>> {
   let successCount = 0;
@@ -112,9 +110,9 @@ export async function moveAssetToRepo(
 export function installCanonicalToRepos(
   asset: Asset,
   targetRepos: Repo[],
-  canonicalBase: string,
+  canonicalBase: string | string[],
 ): Promise<OperationResult<{ successCount: number }>> {
-  return installToMultipleRepos(asset, targetRepos, { mode: 'symlink', canonicalBase }, 'install');
+  return installToMultipleRepos(asset, targetRepos, { canonicalBase }, 'install');
 }
 
 /** Find repos that have symlinks pointing to the given canonical asset */

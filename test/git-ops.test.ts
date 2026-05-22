@@ -64,6 +64,61 @@ describe('parseGitHubUrl', () => {
     const result = parseGitHubUrl('https://github.com/my-org/my.repo-name');
     assert.deepEqual(result, { owner: 'my-org', repo: 'my.repo-name', branch: undefined, subpath: undefined });
   });
+
+  it('parses blob URL with subpath', () => {
+    const result = parseGitHubUrl('https://github.com/supabase/agent-skills/blob/main/skills/supabase');
+    assert.deepEqual(result, { owner: 'supabase', repo: 'agent-skills', branch: 'main', subpath: 'skills/supabase' });
+  });
+
+  it('parses blob URL pointing to SKILL.md and strips filename', () => {
+    const result = parseGitHubUrl('https://github.com/supabase/agent-skills/blob/main/skills/supabase/SKILL.md');
+    assert.deepEqual(result, { owner: 'supabase', repo: 'agent-skills', branch: 'main', subpath: 'skills/supabase' });
+  });
+
+  it('parses blob URL with only SKILL.md at root subpath', () => {
+    const result = parseGitHubUrl('https://github.com/owner/repo/blob/main/SKILL.md');
+    assert.deepEqual(result, { owner: 'owner', repo: 'repo', branch: 'main', subpath: undefined });
+  });
+
+  it('parses nested skill with category folder (mattpocock)', () => {
+    const result = parseGitHubUrl('https://github.com/mattpocock/skills/blob/main/skills/productivity/handoff/SKILL.md');
+    assert.deepEqual(result, { owner: 'mattpocock', repo: 'skills', branch: 'main', subpath: 'skills/productivity/handoff' });
+  });
+
+  it('parses tree URL equivalent of nested skill (mattpocock)', () => {
+    const result = parseGitHubUrl('https://github.com/mattpocock/skills/tree/main/skills/productivity/handoff');
+    assert.deepEqual(result, { owner: 'mattpocock', repo: 'skills', branch: 'main', subpath: 'skills/productivity/handoff' });
+  });
+
+  it('parses repo-only URL (mattpocock)', () => {
+    const result = parseGitHubUrl('https://github.com/mattpocock/skills');
+    assert.deepEqual(result, { owner: 'mattpocock', repo: 'skills', branch: undefined, subpath: undefined });
+  });
+
+  it('parses skill at standard depth (anthropics)', () => {
+    const result = parseGitHubUrl('https://github.com/anthropics/skills/blob/main/skills/skill-creator/SKILL.md');
+    assert.deepEqual(result, { owner: 'anthropics', repo: 'skills', branch: 'main', subpath: 'skills/skill-creator' });
+  });
+
+  it('parses tree URL equivalent (anthropics)', () => {
+    const result = parseGitHubUrl('https://github.com/anthropics/skills/tree/main/skills/skill-creator');
+    assert.deepEqual(result, { owner: 'anthropics', repo: 'skills', branch: 'main', subpath: 'skills/skill-creator' });
+  });
+
+  it('parses skill inside dot-prefixed category folder (openai)', () => {
+    const result = parseGitHubUrl('https://github.com/openai/skills/blob/main/skills/.curated/define-goal/SKILL.md');
+    assert.deepEqual(result, { owner: 'openai', repo: 'skills', branch: 'main', subpath: 'skills/.curated/define-goal' });
+  });
+
+  it('parses tree URL with dot-prefixed category folder (openai)', () => {
+    const result = parseGitHubUrl('https://github.com/openai/skills/tree/main/skills/.curated/define-goal');
+    assert.deepEqual(result, { owner: 'openai', repo: 'skills', branch: 'main', subpath: 'skills/.curated/define-goal' });
+  });
+
+  it('parses repo-only URL (openai)', () => {
+    const result = parseGitHubUrl('https://github.com/openai/skills');
+    assert.deepEqual(result, { owner: 'openai', repo: 'skills', branch: undefined, subpath: undefined });
+  });
 });
 
 describe('buildCloneUrl', () => {

@@ -12,10 +12,10 @@ export async function statusCommand(config: LatticeConfig): Promise<void> {
   const allAssets = repos.flatMap(r => r.assets);
   const groups = buildAssetGroups(allAssets);
 
-  const latticeDir = getLatticeDir(config.canonicalPath);
+  const latticeDir = getLatticeDir(config.canonicalPaths[0]);
   const store = new ContextStore(latticeDir);
   await store.load();
-  store.buildFromScan(repos, config.canonicalPath);
+  store.buildFromScan(repos, config.canonicalPaths[0]);
   const changed = await store.save();
 
   if (changed) {

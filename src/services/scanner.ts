@@ -5,6 +5,7 @@ import { SETTINGS_JSON, SETTINGS_LOCAL_JSON, CLAUDE_MD, MCP_SERVERS_JSON, CONTEX
 import { hashDirectory, hashFile } from './hasher';
 import { detectAgentsInRepo } from './agent-registry';
 import { enumerateAssetDir as enumerateRaw } from './asset-enumerator';
+import { isDirEntry, isFileEntry } from './fs-utils';
 import { expandHome } from './config';
 import type { LatticeConfig } from './config';
 
@@ -46,16 +47,16 @@ export class Scanner {
 
     repos.sort((a, b) => a.name.localeCompare(b.name));
 
-    // Scan global ~/.claude/ if enabled
-    if (this.config.scanGlobal) {
-      const globalRepo = await this.buildGlobalRepo();
-      if (globalRepo) { repos.unshift(globalRepo); }
+    // Scan global paths (~/.claude, ~/.cursor, ~/.github, etc.)
+    const globalRepos = await this.buildGlobalRepos();
+    for (const gr of globalRepos.reverse()) {
+      repos.unshift(gr);
     }
 
-    // Scan canonical path (~/.assets/) for shared assets
-    const canonicalRepo = await this.buildCanonicalRepo();
-    if (canonicalRepo && canonicalRepo.assets.length > 0) {
-      repos.unshift(canonicalRepo);
+    // Scan canonical paths (~/.assets/, ~/.agents/, etc.) for shared assets
+    const canonicalRepos = await this.buildCanonicalRepos();
+    for (const cr of canonicalRepos.reverse()) {
+      repos.unshift(cr);
     }
 
     return repos;
@@ -92,8 +93,18 @@ export class Scanner {
       return;
     }
 
-    const hasGitDir = entries.some(e => e.isDirectory() && e.name === '.git');
-    const hasContextDir = entries.some(e => e.isDirectory() && CONTEXT_DIRS.has(e.name));
+    let hasGitDir = entries.some(e => e.isDirectory() && e.name === '.git');
+    let hasContextDir = entries.some(e => e.isDirectory() && CONTEXT_DIRS.has(e.name));
+
+    if (!hasGitDir || !hasContextDir) {
+      for (const e of entries) {
+        if (!e.isSymbolicLink()) continue;
+        const ep = path.join(dirPath, e.name);
+        if (!hasGitDir && e.name === '.git' && await isDirEntry(ep, e)) hasGitDir = true;
+        if (!hasContextDir && CONTEXT_DIRS.has(e.name) && await isDirEntry(ep, e)) hasContextDir = true;
+        if (hasGitDir && hasContextDir) break;
+      }
+    }
 
     if (hasGitDir && !hasContextDir) {
       const name = path.relative(root, dirPath) || path.basename(dirPath);
@@ -104,76 +115,92 @@ export class Scanner {
     // If already a full repo (git + context), skip — it's handled by normal scan
     if (hasGitDir && hasContextDir) return;
 
-    const subdirs = entries.filter(
-      e => e.isDirectory() && !this.ignoreDirs.has(e.name) && !e.name.startsWith('.'),
-    );
+    const subdirs: import('fs').Dirent[] = [];
+    for (const e of entries) {
+      if (this.ignoreDirs.has(e.name) || e.name.startsWith('.')) continue;
+      if (await isDirEntry(path.join(dirPath, e.name), e)) subdirs.push(e);
+    }
     await Promise.all(
       subdirs.map(e => this.walkForGitOnly(path.join(dirPath, e.name), depth + 1, root, results)),
     );
   }
 
-  /** Build a special "Global" repo from ~/.claude/ */
-  private async buildGlobalRepo(): Promise<Repo | null> {
+  /** Build global repos from all configured global paths */
+  private async buildGlobalRepos(): Promise<Repo[]> {
     const home = process.env.HOME ?? '';
-    if (!home) return null;
-    const claudePath = path.join(home, '.claude');
-    try {
-      await fs.access(claudePath);
-    } catch {
-      return null;
-    }
-    const repo: Repo = {
-      name: '~/.claude',
-      path: home,
-      claudePath,
-      assets: [],
-      isGlobal: true,
-    };
-    repo.assets = await this.enumerateAssets(repo);
-    return repo;
-  }
-
-  /** Build a special "Canonical" repo from the configured canonical skills path */
-  private async buildCanonicalRepo(): Promise<Repo | null> {
-    const expanded = expandHome(this.config.canonicalPath);
-    try {
-      await fs.access(expanded);
-    } catch {
-      return null;
-    }
-    const repo: Repo = {
-      name: '~/.assets (Canonical)',
-      path: expanded,
-      claudePath: expanded,
-      assets: [],
-      isCanonical: true,
-    };
-    let entries: import('fs').Dirent[];
-    try {
-      entries = await fs.readdir(expanded, { withFileTypes: true });
-    } catch {
-      return null;
-    }
-    for (const entry of entries) {
-      if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
-      if (entry.name in ASSET_TYPE_DIRS) {
-        const assetType = ASSET_TYPE_DIRS[entry.name];
-        const innerAssets = await this.enumerateAssetDir(path.join(expanded, entry.name), assetType, repo.name);
-        repo.assets.push(...innerAssets);
-      } else {
-        // Treat unrecognized directories as skills (backwards compat with flat canonical path)
-        const hash = await hashDirectory(path.join(expanded, entry.name));
-        repo.assets.push({
-          name: entry.name,
-          type: 'skill',
-          path: path.join(expanded, entry.name),
-          isDirectory: true,
-          hash,
-          repoName: repo.name,
-        });
+    if (!home) return [];
+    const results: Repo[] = [];
+    for (const globalPath of this.config.globalPaths) {
+      const expanded = expandHome(globalPath);
+      try {
+        await fs.access(expanded);
+      } catch {
+        continue;
+      }
+      const repo: Repo = {
+        name: globalPath,
+        path: home,
+        claudePath: expanded,
+        assets: [],
+        isGlobal: true,
+      };
+      repo.assets = await this.enumerateAssets(repo);
+      if (repo.assets.length > 0) {
+        results.push(repo);
       }
     }
-    return repo;
+    return results;
+  }
+
+  /** Build canonical repos from all configured canonical paths */
+  private async buildCanonicalRepos(): Promise<Repo[]> {
+    const results: Repo[] = [];
+    for (const canonicalPath of this.config.canonicalPaths) {
+      const expanded = expandHome(canonicalPath);
+      try {
+        await fs.access(expanded);
+      } catch {
+        continue;
+      }
+      const repo: Repo = {
+        name: `${canonicalPath} (Canonical)`,
+        path: expanded,
+        claudePath: expanded,
+        assets: [],
+        isCanonical: true,
+      };
+      let entries: import('fs').Dirent[];
+      try {
+        entries = await fs.readdir(expanded, { withFileTypes: true });
+      } catch {
+        continue;
+      }
+      for (const entry of entries) {
+        if (entry.name.startsWith('.')) continue;
+        const entryPath = path.join(expanded, entry.name);
+        if (!await isDirEntry(entryPath, entry)) continue;
+        if (entry.name in ASSET_TYPE_DIRS) {
+          const assetType = ASSET_TYPE_DIRS[entry.name];
+          const innerAssets = await this.enumerateAssetDir(entryPath, assetType, repo.name);
+          repo.assets.push(...innerAssets);
+        } else {
+          // Treat unrecognized directories as skills (backwards compat with flat canonical path)
+          const hash = await hashDirectory(entryPath);
+          repo.assets.push({
+            name: entry.name,
+            type: 'skill',
+            path: entryPath,
+            isDirectory: true,
+            hash,
+            repoName: repo.name,
+          });
+        }
+      }
+      if (repo.assets.length > 0) {
+        results.push(repo);
+      }
+    }
+    return results;
   }
 
   private async scanDirectory(dirPath: string, depth: number, repos: Repo[]): Promise<void> {
@@ -186,8 +213,19 @@ export class Scanner {
       return;
     }
 
-    const hasContextDir = entries.some(e => e.isDirectory() && CONTEXT_DIRS.has(e.name));
-    const hasGitDir = entries.some(e => e.isDirectory() && e.name === '.git');
+    let hasContextDir = entries.some(e => e.isDirectory() && CONTEXT_DIRS.has(e.name));
+    let hasGitDir = entries.some(e => e.isDirectory() && e.name === '.git');
+
+    if (!hasContextDir || !hasGitDir) {
+      for (const e of entries) {
+        if (!e.isSymbolicLink()) continue;
+        const ep = path.join(dirPath, e.name);
+        if (!hasContextDir && CONTEXT_DIRS.has(e.name) && await isDirEntry(ep, e)) hasContextDir = true;
+        if (!hasGitDir && e.name === '.git' && await isDirEntry(ep, e)) hasGitDir = true;
+        if (hasContextDir && hasGitDir) break;
+      }
+    }
+
     if (hasContextDir && hasGitDir) {
       const repo = await this.buildRepo(dirPath);
       if (repo) {
@@ -196,9 +234,11 @@ export class Scanner {
       return;
     }
 
-    const subdirs = entries.filter(
-      e => e.isDirectory() && !this.ignoreDirs.has(e.name) && !e.name.startsWith('.'),
-    );
+    const subdirs: import('fs').Dirent[] = [];
+    for (const e of entries) {
+      if (this.ignoreDirs.has(e.name) || e.name.startsWith('.')) continue;
+      if (await isDirEntry(path.join(dirPath, e.name), e)) subdirs.push(e);
+    }
     await Promise.all(
       subdirs.map(e => this.scanDirectory(path.join(dirPath, e.name), depth + 1, repos)),
     );
@@ -243,14 +283,14 @@ export class Scanner {
     for (const entry of claudeEntries) {
       const fullPath = path.join(claudePath, entry.name);
 
-      if (entry.isDirectory() && entry.name in ASSET_TYPE_DIRS) {
+      if (await isDirEntry(fullPath, entry) && entry.name in ASSET_TYPE_DIRS) {
         const assetType = ASSET_TYPE_DIRS[entry.name];
         const innerAssets = await this.enumerateAssetDir(fullPath, assetType, repo.name);
         assets.push(...innerAssets);
         continue;
       }
 
-      if (entry.isFile()) {
+      if (await isFileEntry(fullPath, entry)) {
         if (entry.name === SETTINGS_JSON || entry.name === SETTINGS_LOCAL_JSON) {
           const hash = await hashFile(fullPath);
           assets.push({ name: entry.name, type: 'settings', path: fullPath, isDirectory: false, hash, repoName: repo.name });

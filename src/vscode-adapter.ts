@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import type { LatticeConfig, InstallMode } from './services/config';
+import type { LatticeConfig } from './services/config';
 import { DEFAULT_CONFIG } from './services/config';
 import type { OperationResult } from './services/result';
 
@@ -8,11 +8,10 @@ export function readVscodeConfig(): LatticeConfig {
   const config = vscode.workspace.getConfiguration('latticeContextManager');
   return {
     roots: config.get<string[]>('roots', DEFAULT_CONFIG.roots),
-    canonicalPath: config.get<string>('canonicalPath', DEFAULT_CONFIG.canonicalPath),
+    canonicalPaths: config.get<string[]>('canonicalPaths', DEFAULT_CONFIG.canonicalPaths),
+    globalPaths: config.get<string[]>('globalPaths', DEFAULT_CONFIG.globalPaths),
     maxDepth: config.get<number>('maxDepth', DEFAULT_CONFIG.maxDepth),
     ignoreDirs: config.get<string[]>('ignoreDirs', DEFAULT_CONFIG.ignoreDirs),
-    scanGlobal: config.get<boolean>('scanGlobal', DEFAULT_CONFIG.scanGlobal),
-    installMode: config.get<InstallMode>('installMode', DEFAULT_CONFIG.installMode),
     hiddenRepos: DEFAULT_CONFIG.hiddenRepos,
   };
 }
