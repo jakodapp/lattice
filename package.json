@@ -2,7 +2,7 @@
   "name": "lattice-context-manager",
   "displayName": "Lattice Context Manager",
   "description": "Visual dashboard to manage AI agent configurations (.claude/, .cursor/, .github/) across multiple repositories with sync detection, symlink sharing, and drag-and-drop operations",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "publisher": "Jakoda",
   "license": "MIT",
   "repository": {
@@ -15,10 +15,26 @@
   },
   "icon": "resources/logo.png",
   "keywords": [
-    "claude", "claude-code", "ai", "configuration", "manager",
-    "skills", "commands", "agents", "rules", "dashboard",
-    "kanban", "sync", "dotclaude", "cursor", "windsurf",
-    "cline", "codex", "copilot", "mcp", "ai-agents"
+    "claude",
+    "claude-code",
+    "ai",
+    "configuration",
+    "manager",
+    "skills",
+    "commands",
+    "agents",
+    "rules",
+    "dashboard",
+    "kanban",
+    "sync",
+    "dotclaude",
+    "cursor",
+    "windsurf",
+    "cline",
+    "codex",
+    "copilot",
+    "mcp",
+    "ai-agents"
   ],
   "galleryBanner": {
     "color": "#0a0a0f",
@@ -221,6 +237,7 @@
     "package": "npx @vscode/vsce package"
   },
   "devDependencies": {
+    "@playwright/test": "^1.60.0",
     "@types/node": "^20.11.0",
     "@types/vscode": "^1.85.0",
     "esbuild": "^0.20.0",

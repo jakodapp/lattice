@@ -2,6 +2,17 @@
 
 All notable changes to the Lattice Context Manager extension will be documented in this file.
 
+## [0.1.1] - 2026-05-22
+
+### Added
+- Hide/unhide repositories with discovery modal and `.git` validation
+- Recursive `SKILL.md` detection for nested skill directories
+- Subpath support for GitHub imports (install specific files from a repo)
+
+### Fixed
+- Status bar watcher not triggering refresh correctly
+- `hiddenRepos` config getting wiped on settings update
+
 ## [0.1.0] - 2026-05-16
 
 ### Added
