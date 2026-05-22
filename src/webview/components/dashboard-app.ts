@@ -434,6 +434,7 @@ export class DashboardApp extends LitElement {
         .action="${this._repoPicker.action}"
         .asset="${this._repoPicker.asset}"
         .repos="${this._repos}"
+        .includeCanonical="${!!this._pendingGithubInstall}"
         @picker-confirm="${this._onPickerConfirm}"
         @picker-dismiss="${this._onPickerDismiss}"
         @picker-add-repo="${this._addRepo}"
@@ -570,23 +571,14 @@ export class DashboardApp extends LitElement {
     this._vscode.postMessage({ type: 'open-detail', repoName: e.detail.repoName });
   }
 
-  private _onAssetDrop(e: CustomEvent<{ asset: SerializedAsset; targetRepoName: string; action: 'copy' | 'replace' | 'move' }>) {
-    const { asset, targetRepoName, action } = e.detail;
-    if (action === 'move') {
-      this._vscode.postMessage({
-        type: 'move-asset',
-        assetPath: asset.path,
-        assetRepoName: asset.repoName,
-        targetRepoName,
-      });
-    } else {
-      this._vscode.postMessage({
-        type: 'copy-asset',
-        assetPath: asset.path,
-        assetRepoName: asset.repoName,
-        targetRepoName,
-      });
-    }
+  private _onAssetDrop(e: CustomEvent<{ asset: SerializedAsset; targetRepoName: string }>) {
+    const { asset, targetRepoName } = e.detail;
+    this._vscode.postMessage({
+      type: 'copy-asset',
+      assetPath: asset.path,
+      assetRepoName: asset.repoName,
+      targetRepoName,
+    });
   }
 
   private _onColumnClick(e: CustomEvent<{ repoName: string }>) {
