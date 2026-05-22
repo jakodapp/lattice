@@ -61,7 +61,8 @@ export type ToWebview =
   | { type: 'asset-preview'; asset: SerializedAsset; content: string }
   | { type: 'github-assets'; repoName: string; clonePath: string; sourceUrl: string; assets: DiscoveredAssetSerialized[] }
   | { type: 'version-pick'; assetName: string; assetPath: string; assetRepoName: string; versions: VersionOption[] }
-  | { type: 'root-added'; rootPath: string };
+  | { type: 'root-added'; rootPath: string }
+  | { type: 'discovered-repos'; hiddenRepos: Array<{ name: string; path: string }>; uninitializedRepos: Array<{ name: string; path: string }> };
 
 // Webview → Extension messages
 export type ToExtension =
@@ -77,7 +78,7 @@ export type ToExtension =
   | { type: 'move-asset-to-repo'; assetPath: string; assetRepoName: string; targetRepoName: string }
   | { type: 'install-canonical'; assetPath: string; targetRepoNames: string[] }
   | { type: 'delete-canonical'; assetPath: string }
-  | { type: 'add-repo' }
+  | { type: 'add-repo'; repoPath?: string }
   | { type: 'switch-view'; view: ViewMode }
   | { type: 'open-project'; repoPath: string }
   | { type: 'forget-repo'; repoName: string }
@@ -90,12 +91,15 @@ export type ToExtension =
   | { type: 'convert-to-symlink'; assetPath: string; assetRepoName: string }
   | { type: 'convert-to-symlink-confirm'; assetPath: string; assetRepoName: string; sourceAssetPath: string }
   | { type: 'add-root'; rootPath: string }
-  | { type: 'browse-root' };
+  | { type: 'browse-root' }
+  | { type: 'hide-repo'; repoPath: string }
+  | { type: 'unhide-repo'; repoPath: string }
+  | { type: 'discover-repos' };
 
 export type ViewMode = 'repo' | 'type';
 
-/** Asset types hidden from the dashboard views (not user-facing configs) */
-export const HIDDEN_ASSET_TYPES = new Set<string>(['settings', 'claude-md', 'mcp-config']);
+// Re-exported from shared constants for webview access
+export { HIDDEN_ASSET_TYPES } from '../constants';
 
 /** Asset types that are unique per repo (no copy/install, only delete) */
 export const CONTEXT_FILE_TYPES = new Set<string>(['claude-md', 'settings', 'mcp-config']);

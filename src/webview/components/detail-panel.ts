@@ -27,7 +27,7 @@ export class DetailPanel extends LitElement {
 
   @state() private _mode: PanelMode = 'detail';
   @state() private _viewingFile: FileEntry | null = null;
-  @state() private _width = 480;
+  @state() private _width = Math.max(480, window.innerWidth * 0.6);
   @state() private _dragging = false;
 
   private static readonly SPLIT_THRESHOLD = 700;
@@ -654,6 +654,9 @@ export class DetailPanel extends LitElement {
   `;
 
   updated(changed: Map<string, unknown>) {
+    if (changed.has('open') && this.open) {
+      this._width = Math.max(480, window.innerWidth * 0.6);
+    }
     if (changed.has('repo') && this.repo && !this.navigateToFile) {
       this._mode = 'detail';
       this._viewingFile = null;

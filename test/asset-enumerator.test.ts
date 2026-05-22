@@ -90,4 +90,76 @@ describe('enumerateAssetDir', () => {
     const items = await enumerateAssetDir('/nonexistent/path', 'command');
     assert.equal(items.length, 0);
   });
+
+  // --- Recursive skill detection via SKILL.md ---
+
+  it('discovers nested skills inside category folders', async () => {
+    const dir = path.join(tmpDir, 'nested-skills');
+    const catDir = path.join(dir, 'engineering');
+    await fs.mkdir(path.join(catDir, 'tdd'), { recursive: true });
+    await fs.mkdir(path.join(catDir, 'prototype'), { recursive: true });
+    await fs.writeFile(path.join(catDir, 'tdd', 'SKILL.md'), '# TDD');
+    await fs.writeFile(path.join(catDir, 'prototype', 'SKILL.md'), '# Prototype');
+
+    const items = await enumerateAssetDir(dir, 'skill');
+    assert.equal(items.length, 2);
+    assert.ok(items.some(i => i.name === 'tdd' && i.isDirectory));
+    assert.ok(items.some(i => i.name === 'prototype' && i.isDirectory));
+    // Category folder itself should NOT appear
+    assert.ok(!items.some(i => i.name === 'engineering'));
+  });
+
+  it('discovers skills at mixed depths', async () => {
+    const dir = path.join(tmpDir, 'mixed-depth');
+    await fs.mkdir(path.join(dir, 'direct-skill'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'direct-skill', 'SKILL.md'), '# Direct');
+    await fs.mkdir(path.join(dir, 'category', 'nested-skill'), { recursive: true });
+    await fs.writeFile(path.join(dir, 'category', 'nested-skill', 'SKILL.md'), '# Nested');
+
+    const items = await enumerateAssetDir(dir, 'skill');
+    assert.equal(items.length, 2);
+    assert.ok(items.some(i => i.name === 'direct-skill'));
+    assert.ok(items.some(i => i.name === 'nested-skill'));
+  });
+
+  it('discovers skills inside dot-prefixed category folders', async () => {
+    const dir = path.join(tmpDir, 'dot-categories');
+    await fs.mkdir(path.join(dir, '.curated', 'pdf'), { recursive: true });
+    await fs.writeFile(path.join(dir, '.curated', 'pdf', 'SKILL.md'), '# PDF');
+
+    const items = await enumerateAssetDir(dir, 'skill');
+    assert.equal(items.length, 1);
+    assert.equal(items[0].name, 'pdf');
+  });
+
+  it('returns empty for category folder with no skills', async () => {
+    const dir = path.join(tmpDir, 'empty-category');
+    await fs.mkdir(path.join(dir, 'placeholder'), { recursive: true });
+    // No SKILL.md anywhere
+
+    const items = await enumerateAssetDir(dir, 'skill');
+    assert.equal(items.length, 0);
+  });
+
+  it('discovers deeply nested skills', async () => {
+    const dir = path.join(tmpDir, 'deep-nesting');
+    const deepPath = path.join(dir, 'a', 'b', 'c', 'deep-skill');
+    await fs.mkdir(deepPath, { recursive: true });
+    await fs.writeFile(path.join(deepPath, 'SKILL.md'), '# Deep');
+
+    const items = await enumerateAssetDir(dir, 'skill');
+    assert.equal(items.length, 1);
+    assert.equal(items[0].name, 'deep-skill');
+  });
+
+  it('respects maxDepth limit for skill recursion', async () => {
+    const dir = path.join(tmpDir, 'depth-limit');
+    const deepPath = path.join(dir, 'a', 'b', 'c', 'too-deep');
+    await fs.mkdir(deepPath, { recursive: true });
+    await fs.writeFile(path.join(deepPath, 'SKILL.md'), '# Too Deep');
+
+    // maxDepth=2 means: dir(0) → a(1) → b(2) → stop
+    const items = await enumerateAssetDir(dir, 'skill', 2);
+    assert.equal(items.length, 0);
+  });
 });

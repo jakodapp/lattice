@@ -1,7 +1,7 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, query, state } from 'lit/decorators.js';
 import { FileEntry, FileGroup, SerializedAsset, SerializedRepo, DiscoveredAssetSerialized, VersionOption, ToExtension, ToWebview, ViewMode, HIDDEN_ASSET_TYPES, isContextFile } from '../types';
-import { iconDownload, iconRefresh, iconTrash, iconFolderOpen } from '../icons';
+import { iconDownload, iconRefresh, iconFolderOpen, iconEyeOff } from '../icons';
 import './kanban-board';
 import './view-toggle';
 import './search-bar';
@@ -30,7 +30,8 @@ export class DashboardApp extends LitElement {
   @query('.root-input') private _rootInputEl!: HTMLInputElement;
   @state() private _ctxMenu: { visible: boolean; x: number; y: number; asset: SerializedAsset | null; instanceCount: number; viewContext: 'repo' | 'type' } = { visible: false, x: 0, y: 0, asset: null, instanceCount: 1, viewContext: 'repo' };
   @state() private _repoPicker: { visible: boolean; action: 'copy' | 'move' | 'install'; asset: SerializedAsset | null } = { visible: false, action: 'copy', asset: null };
-  @state() private _repoCtx: { visible: boolean; x: number; y: number; repoName: string } = { visible: false, x: 0, y: 0, repoName: '' };
+  @state() private _repoCtx: { visible: boolean; x: number; y: number; repoName: string; repoPath: string } = { visible: false, x: 0, y: 0, repoName: '', repoPath: '' };
+  @state() private _discoveryModal: { visible: boolean; hiddenRepos: Array<{ name: string; path: string }>; uninitializedRepos: Array<{ name: string; path: string }> } = { visible: false, hiddenRepos: [], uninitializedRepos: [] };
   @state() private _assetPicker: { visible: boolean; repoName: string; clonePath: string; sourceUrl: string; assets: DiscoveredAssetSerialized[] } = { visible: false, repoName: '', clonePath: '', sourceUrl: '', assets: [] };
   @state() private _versionPicker: { visible: boolean; assetName: string; assetPath: string; assetRepoName: string; versions: VersionOption[] } = { visible: false, assetName: '', assetPath: '', assetRepoName: '', versions: [] };
   @state() private _pendingGithubInstall: { clonePath: string; sourceUrl: string; assetPaths: string[] } | null = null;
@@ -141,6 +142,73 @@ export class DashboardApp extends LitElement {
     .repo-ctx-item:hover { background: var(--vscode-menu-selectionBackground, #094771); color: var(--vscode-menu-selectionForeground, #fff); }
     .repo-ctx-item.danger:hover { background: rgba(239,68,68,0.2); color: #f87171; }
     .repo-ctx-item svg { width: 14px; height: 14px; flex-shrink: 0; }
+    .repo-ctx-separator { height: 1px; background: var(--vscode-menu-separatorBackground, #454545); margin: 3px 8px; }
+
+    .discovery-backdrop {
+      position: fixed; inset: 0; z-index: 300;
+      background: rgba(0,0,0,0.5);
+      display: flex; align-items: center; justify-content: center;
+    }
+    .discovery-modal {
+      background: var(--vscode-editor-background, #1e1e1e);
+      border: 1px solid var(--vscode-panel-border, #454545);
+      border-radius: 10px;
+      box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+      width: min(600px, 90vw);
+      max-height: 70vh;
+      display: flex; flex-direction: column;
+    }
+    .discovery-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--vscode-panel-border, #454545);
+    }
+    .discovery-title { font-size: 14px; font-weight: 600; }
+    .discovery-close {
+      background: none; border: none; cursor: pointer;
+      font-size: 18px; color: var(--vscode-foreground, #ccc);
+      padding: 4px 8px; border-radius: 4px;
+    }
+    .discovery-close:hover { background: rgba(255,255,255,0.1); }
+    .discovery-body { flex: 1; overflow-y: auto; padding: 16px 20px; }
+    .discovery-section-title {
+      font-size: 11px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.5px; color: var(--vscode-descriptionForeground, #888);
+      margin-bottom: 8px;
+    }
+    .discovery-section-title:not(:first-child) { margin-top: 16px; }
+    .discovery-row {
+      display: flex; align-items: center; gap: 10px;
+      padding: 8px 10px; border-radius: 6px;
+      border: 1px solid var(--vscode-panel-border, #454545);
+      margin-bottom: 6px;
+    }
+    .discovery-row:hover { border-color: var(--vscode-focusBorder, #007acc); }
+    .discovery-row-info { flex: 1; min-width: 0; }
+    .discovery-row-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .discovery-row-path { font-size: 10px; color: var(--vscode-descriptionForeground, #888); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .discovery-btn {
+      padding: 4px 12px; border-radius: 4px; border: none; cursor: pointer;
+      font-size: 11px; font-weight: 500; flex-shrink: 0;
+      background: var(--vscode-button-background, #007acc);
+      color: var(--vscode-button-foreground, #fff);
+    }
+    .discovery-btn:hover { background: var(--vscode-button-hoverBackground, #005fa3); }
+    .discovery-btn.secondary {
+      background: transparent;
+      color: var(--vscode-foreground, #ccc);
+      border: 1px solid var(--vscode-panel-border, #454545);
+    }
+    .discovery-btn.secondary:hover { background: rgba(255,255,255,0.05); }
+    .discovery-footer {
+      padding: 12px 20px;
+      border-top: 1px solid var(--vscode-panel-border, #454545);
+      display: flex; justify-content: flex-end; gap: 8px;
+    }
+    .discovery-empty {
+      text-align: center; padding: 24px;
+      color: var(--vscode-descriptionForeground, #888); font-size: 12px;
+    }
 
     .loading {
       flex: 1;
@@ -389,12 +457,13 @@ export class DashboardApp extends LitElement {
       ${this._repoCtx.visible ? html`
         <div class="repo-ctx-overlay" @click="${this._dismissRepoCtx}" @contextmenu="${(e: Event) => { e.preventDefault(); this._dismissRepoCtx(); }}"></div>
         <div class="repo-ctx-menu" style="left:${Math.min(this._repoCtx.x, window.innerWidth - 200)}px;top:${Math.min(this._repoCtx.y, window.innerHeight - 50)}px">
-          <button class="repo-ctx-item danger" @click="${this._onRepoCtxForget}">
-            ${iconTrash()}
-            Remove repository
+          <button class="repo-ctx-item" @click="${this._onRepoCtxHide}">
+            ${iconEyeOff()}
+            Hide repository
           </button>
         </div>
       ` : ''}
+      ${this._renderDiscoveryModal()}
     `;
   }
 
@@ -475,6 +544,14 @@ export class DashboardApp extends LitElement {
         this._detailOpen = true;
         break;
       }
+      case 'discovered-repos':
+        if (msg.hiddenRepos.length === 0 && msg.uninitializedRepos.length === 0) {
+          // Nothing to show — fall through to folder picker
+          this._vscode.postMessage({ type: 'add-repo' });
+        } else {
+          this._discoveryModal = { visible: true, hiddenRepos: msg.hiddenRepos, uninitializedRepos: msg.uninitializedRepos };
+        }
+        break;
     }
   }
 
@@ -556,15 +633,16 @@ export class DashboardApp extends LitElement {
   }
 
   private _onColumnContextMenu(e: CustomEvent<{ repoName: string; x: number; y: number }>) {
-    this._repoCtx = { visible: true, x: e.detail.x, y: e.detail.y, repoName: e.detail.repoName };
+    const repo = this._repos.find(r => r.name === e.detail.repoName);
+    this._repoCtx = { visible: true, x: e.detail.x, y: e.detail.y, repoName: e.detail.repoName, repoPath: repo?.path ?? '' };
   }
 
   private _dismissRepoCtx() {
     this._repoCtx = { ...this._repoCtx, visible: false };
   }
 
-  private _onRepoCtxForget() {
-    this._vscode.postMessage({ type: 'forget-repo', repoName: this._repoCtx.repoName });
+  private _onRepoCtxHide() {
+    this._vscode.postMessage({ type: 'hide-repo', repoPath: this._repoCtx.repoPath });
     this._repoCtx = { ...this._repoCtx, visible: false };
   }
 
@@ -675,6 +753,77 @@ export class DashboardApp extends LitElement {
     this._versionPicker = { ...this._versionPicker, visible: false };
   }
 
+  // --- Discovery modal ---
+
+  private _renderDiscoveryModal() {
+    if (!this._discoveryModal.visible) return html``;
+
+    const { hiddenRepos, uninitializedRepos } = this._discoveryModal;
+    const hasContent = hiddenRepos.length > 0 || uninitializedRepos.length > 0;
+
+    return html`
+      <div class="discovery-backdrop" @click="${this._dismissDiscovery}" @contextmenu="${(e: Event) => { e.preventDefault(); this._dismissDiscovery(); }}">
+        <div class="discovery-modal" @click="${(e: Event) => e.stopPropagation()}">
+          <div class="discovery-header">
+            <span class="discovery-title">Discover Repositories</span>
+            <button class="discovery-close" @click="${this._dismissDiscovery}">&#x2715;</button>
+          </div>
+          <div class="discovery-body">
+            ${!hasContent ? html`<div class="discovery-empty">No hidden or uninitialized repositories found</div>` : ''}
+            ${hiddenRepos.length > 0 ? html`
+              <div class="discovery-section-title">Hidden repositories</div>
+              ${hiddenRepos.map(r => html`
+                <div class="discovery-row">
+                  <div class="discovery-row-info">
+                    <div class="discovery-row-name">${r.name}</div>
+                    <div class="discovery-row-path">${r.path}</div>
+                  </div>
+                  <button class="discovery-btn" @click="${() => this._onUnhideRepo(r.path)}">Unhide</button>
+                </div>
+              `)}
+            ` : ''}
+            ${uninitializedRepos.length > 0 ? html`
+              <div class="discovery-section-title">Available repositories</div>
+              ${uninitializedRepos.map(r => html`
+                <div class="discovery-row">
+                  <div class="discovery-row-info">
+                    <div class="discovery-row-name">${r.name}</div>
+                    <div class="discovery-row-path">${r.path}</div>
+                  </div>
+                  <button class="discovery-btn" @click="${() => this._onInitRepo(r.path)}">Add</button>
+                </div>
+              `)}
+            ` : ''}
+          </div>
+          <div class="discovery-footer">
+            <button class="discovery-btn secondary" @click="${this._onBrowseForRepo}">Browse for folder...</button>
+            <span style="flex:1"></span>
+            <button class="discovery-btn secondary" @click="${this._dismissDiscovery}">Close</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  private _dismissDiscovery() {
+    this._discoveryModal = { ...this._discoveryModal, visible: false };
+  }
+
+  private _onUnhideRepo(repoPath: string) {
+    this._vscode.postMessage({ type: 'unhide-repo', repoPath });
+    this._discoveryModal = { ...this._discoveryModal, visible: false };
+  }
+
+  private _onInitRepo(repoPath: string) {
+    this._vscode.postMessage({ type: 'add-repo', repoPath });
+    this._discoveryModal = { ...this._discoveryModal, visible: false };
+  }
+
+  private _onBrowseForRepo() {
+    this._discoveryModal = { ...this._discoveryModal, visible: false };
+    this._vscode.postMessage({ type: 'add-repo' });
+  }
+
   private _importFromGithub() {
     this._vscode.postMessage({ type: 'import-from-github' });
   }
@@ -709,7 +858,7 @@ export class DashboardApp extends LitElement {
   }
 
   private _addRepo() {
-    this._vscode.postMessage({ type: 'add-repo' });
+    this._vscode.postMessage({ type: 'discover-repos' });
   }
 
 
