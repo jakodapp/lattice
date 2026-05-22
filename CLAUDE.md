@@ -21,6 +21,7 @@ src/
 ├── types.ts                  ← Core interfaces: Repo, Asset, AssetType, SyncStatus
 ├── services/
 │   ├── scanner.ts            ← Scans root dirs, discovers repos, enumerates assets
+│   ├── fs-utils.ts           ← Shared symlink-aware helpers (isDirEntry, isFileEntry)
 │   ├── hasher.ts             ← SHA-256 content hashing (files and directories)
 │   ├── sync-detector.ts      ← Groups assets by name, compares hashes
 │   ├── file-ops.ts           ← Copy, move, delete operations
