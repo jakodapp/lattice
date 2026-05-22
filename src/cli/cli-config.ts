@@ -24,10 +24,46 @@ export async function loadCliConfig(): Promise<LatticeConfig> {
   }
 }
 
-/** Save CLI config */
+/**
+ * Merge incoming config with existing on-disk config, preserving lattice-managed
+ * fields (hiddenRepos) unless the caller explicitly changed them from default.
+ */
+export function mergeLatticeConfig(
+  incoming: LatticeConfig,
+  existing: Partial<LatticeConfig>,
+): LatticeConfig {
+  return {
+    ...incoming,
+    // Preserve on-disk hiddenRepos when incoming has the default value (empty array).
+    // Callers that intentionally modify hiddenRepos pass the modified array, which
+    // differs from default and is kept as-is.
+    hiddenRepos: existing.hiddenRepos !== undefined && incoming.hiddenRepos.length === 0
+      ? existing.hiddenRepos
+      : incoming.hiddenRepos,
+  };
+}
+
+/** Save CLI config, preserving lattice-managed fields from existing file */
 export async function saveCliConfig(config: LatticeConfig): Promise<void> {
   const latticeDir = getLatticeDir(config.canonicalPath);
   await fs.mkdir(latticeDir, { recursive: true });
   const configPath = path.join(latticeDir, 'config.json');
-  await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf-8');
+
+  let existing: Partial<LatticeConfig> = {};
+  try {
+    const raw = await fs.readFile(configPath, 'utf-8');
+    existing = JSON.parse(raw) as Partial<LatticeConfig>;
+  } catch { /* file doesn't exist yet */ }
+
+  const merged = mergeLatticeConfig(config, existing);
+  await fs.writeFile(configPath, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
+}
+
+/** Write config directly without re-reading/merging. Use when the caller
+ *  has already loaded and modified the config (e.g. ensureLatticeStore). */
+export async function writeCliConfigDirect(config: LatticeConfig): Promise<void> {
+  const latticeDir = getLatticeDir(config.canonicalPath);
+  await fs.mkdir(latticeDir, { recursive: true });
+  const configPath = path.join(latticeDir, 'config.json');
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }

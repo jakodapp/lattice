@@ -2,6 +2,8 @@
 
 > Visual dashboard to manage AI agent configurations across all your repositories
 
+[<img src="https://cdn.vsassets.io/v/M273_20260428.4/_content/Header/vs-logo.png" width="170" style="background-color: black; padding: 10px;" alt="VS Code Marketplace">](https://marketplace.visualstudio.com/items?itemName=Jakoda.lattice-context-manager)&nbsp;&nbsp;[<img src="https://outreach.eclipse.foundation/hs-fs/hubfs/OpenVSX-logo.png?width=369&height=117&name=OpenVSX-logo.png" style="background-color: white; padding: 10px;" width="150" alt="Open VSX">](https://open-vsx.org/extension/Jakoda/lattice-context-manager)
+
 Manage `.claude/`, `.cursor/`, `.github/copilot-instructions` and other AI agent config directories from a single kanban-style dashboard. See what's synced, what's diverged, and move assets between repos with drag-and-drop.
 
 ![Dashboard — Repositories view](images/dashboard-repos.png)
@@ -14,7 +16,9 @@ Manage `.claude/`, `.cursor/`, `.github/copilot-instructions` and other AI agent
 - **Drag-and-drop** — copy or move skills, commands, agents, rules between repositories
 - **Symlink sharing** — share assets via a canonical `~/.assets` path instead of duplicating files
 - **Detail panel** — resizable split-view with file list and markdown preview
-- **GitHub import** — install skills and commands directly from a GitHub URL
+- **GitHub import** — install skills and commands directly from a GitHub URL, with subpath support
+- **Hide/unhide repos** — toggle repository visibility from a discovery modal
+- **Recursive skill detection** — discovers nested `SKILL.md` files in skill directories
 - **Global config** — includes `~/.claude/` global configuration in the dashboard
 
 ## Screenshots

@@ -12,6 +12,7 @@ export interface LatticeConfig {
   ignoreDirs: string[];
   scanGlobal: boolean;
   installMode: InstallMode;
+  hiddenRepos: string[];
 }
 
 export const DEFAULT_CONFIG: LatticeConfig = {
@@ -24,4 +25,5 @@ export const DEFAULT_CONFIG: LatticeConfig = {
   ],
   scanGlobal: true,
   installMode: 'copy',
+  hiddenRepos: [],
 };

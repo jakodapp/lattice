@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { Asset, AssetGroup, Repo } from './types';
-import { getErrorMessage } from './constants';
+import { getErrorMessage, HIDDEN_ASSET_TYPES } from './constants';
 import { expandHome } from './services/config';
 import { Scanner } from './services/scanner';
 import { Watcher } from './services/watcher';
@@ -9,7 +9,7 @@ import { buildAssetGroups } from './services/sync-detector';
 import { readVscodeConfig } from './vscode-adapter';
 import { ContextStore } from './services/context-store';
 import { LatticeGit } from './services/lattice-git';
-import { saveCliConfig } from './cli/cli-config';
+import { loadCliConfig, writeCliConfigDirect } from './cli/cli-config';
 import { openFile } from './commands/open-file';
 import { diffWith } from './commands/diff-with';
 import { copyToRepo } from './commands/copy-to-repo';
@@ -61,7 +61,16 @@ export function activate(context: vscode.ExtensionContext) {
   const watcher = new Watcher(() => refresh());
   context.subscriptions.push(watcher);
 
+  let refreshRunning = false;
+  let refreshQueued = false;
+
   async function refresh() {
+    if (refreshRunning) {
+      refreshQueued = true;
+      return;
+    }
+    refreshRunning = true;
+
     const scanner = new Scanner(readVscodeConfig());
     statusBar.text = '$(sync~spin) LCM: Scanning...';
     statusBar.show();
@@ -69,16 +78,27 @@ export function activate(context: vscode.ExtensionContext) {
     try {
       store.repos = await scanner.scan();
       store.assetGroups = buildAssetGroups(store.repos.flatMap(r => r.assets));
-      watcher.watchRepos(store.repos);
 
-      // Show asset count for the current workspace project
+      // Only watch the current workspace's .claude/ folder — that's all the status bar needs.
+      // Global, canonical, and other repos are scanned on-demand (dashboard open, manual refresh).
       const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
       const currentRepo = workspacePath ? store.repos.find(r => r.path === workspacePath) : undefined;
-      const localAssetCount = currentRepo ? currentRepo.assets.length : 0;
-      statusBar.text = `$(layout) Lattice (${localAssetCount} assets)`;
+      watcher.watchRepos(currentRepo ? [currentRepo] : []);
+
+      const localAssetCount = currentRepo
+        ? currentRepo.assets.filter(a => !HIDDEN_ASSET_TYPES.has(a.type)).length
+        : 0;
+      statusBar.text = `$(layout) ${localAssetCount} assets`;
     } catch (err) {
       statusBar.text = '$(error) LCM: Scan failed';
       vscode.window.showErrorMessage(`LCM scan failed: ${getErrorMessage(err)}`);
+    } finally {
+      refreshRunning = false;
+    }
+
+    if (refreshQueued) {
+      refreshQueued = false;
+      refresh();
     }
   }
 
@@ -178,9 +198,19 @@ async function ensureLatticeStore(config: import('./services/config').LatticeCon
   const latticeDir = path.join(canonicalExpanded, '.lattice');
 
   try {
-    // Persist extension config so CLI uses the same roots
-    // Must happen before ensureRepo() so config.json is included in init commit
-    await saveCliConfig(config);
+    // Persist VSCode-owned settings so CLI uses the same roots.
+    // Load existing config first to preserve lattice-managed fields (hiddenRepos),
+    // then overlay only the VSCode-owned fields and write directly (no re-read merge).
+    const existing = await loadCliConfig();
+    await writeCliConfigDirect({
+      ...existing,
+      roots: config.roots,
+      canonicalPath: config.canonicalPath,
+      maxDepth: config.maxDepth,
+      ignoreDirs: config.ignoreDirs,
+      scanGlobal: config.scanGlobal,
+      installMode: config.installMode,
+    });
 
     const git = new LatticeGit(latticeDir);
     await git.ensureRepo();

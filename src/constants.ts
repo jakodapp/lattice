@@ -1,3 +1,9 @@
+// --- Context directories that identify a managed repo alongside .git ---
+export const CONTEXT_DIRS = new Set(['.claude', '.github', '.cursor']);
+
+// --- Asset types hidden from user-facing counts and views ---
+export const HIDDEN_ASSET_TYPES = new Set(['settings', 'claude-md', 'mcp-config']);
+
 // --- File names ---
 export const SKILL_MD = 'SKILL.md';
 export const CLAUDE_MD = 'CLAUDE.md';

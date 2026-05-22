@@ -1,7 +1,7 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { Asset, AssetType, ASSET_TYPE_DIRS, Repo } from '../types';
-import { SETTINGS_JSON, SETTINGS_LOCAL_JSON, CLAUDE_MD, MCP_SERVERS_JSON } from '../constants';
+import { SETTINGS_JSON, SETTINGS_LOCAL_JSON, CLAUDE_MD, MCP_SERVERS_JSON, CONTEXT_DIRS } from '../constants';
 import { hashDirectory, hashFile } from './hasher';
 import { detectAgentsInRepo } from './agent-registry';
 import { enumerateAssetDir as enumerateRaw } from './asset-enumerator';
@@ -59,6 +59,57 @@ export class Scanner {
     }
 
     return repos;
+  }
+
+  /** Discover git repos without a context folder (.claude, .github, .cursor) */
+  async discoverGitRepos(): Promise<Array<{ name: string; path: string }>> {
+    const results: Array<{ name: string; path: string }> = [];
+    for (const root of this.config.roots) {
+      const expandedRoot = expandHome(root);
+      try {
+        await this.walkForGitOnly(expandedRoot, 0, expandedRoot, results);
+      } catch {
+        // skip inaccessible roots
+      }
+    }
+    results.sort((a, b) => a.name.localeCompare(b.name));
+    return results;
+  }
+
+  /** Walk directories looking for .git without any context folder */
+  private async walkForGitOnly(
+    dirPath: string,
+    depth: number,
+    root: string,
+    results: Array<{ name: string; path: string }>,
+  ): Promise<void> {
+    if (depth > this.maxDepth) return;
+
+    let entries: import('fs').Dirent[];
+    try {
+      entries = await fs.readdir(dirPath, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    const hasGitDir = entries.some(e => e.isDirectory() && e.name === '.git');
+    const hasContextDir = entries.some(e => e.isDirectory() && CONTEXT_DIRS.has(e.name));
+
+    if (hasGitDir && !hasContextDir) {
+      const name = path.relative(root, dirPath) || path.basename(dirPath);
+      results.push({ name, path: dirPath });
+      return;
+    }
+
+    // If already a full repo (git + context), skip — it's handled by normal scan
+    if (hasGitDir && hasContextDir) return;
+
+    const subdirs = entries.filter(
+      e => e.isDirectory() && !this.ignoreDirs.has(e.name) && !e.name.startsWith('.'),
+    );
+    await Promise.all(
+      subdirs.map(e => this.walkForGitOnly(path.join(dirPath, e.name), depth + 1, root, results)),
+    );
   }
 
   /** Build a special "Global" repo from ~/.claude/ */
@@ -135,8 +186,9 @@ export class Scanner {
       return;
     }
 
-    const hasClaudeDir = entries.some(e => e.isDirectory() && e.name === '.claude');
-    if (hasClaudeDir) {
+    const hasContextDir = entries.some(e => e.isDirectory() && CONTEXT_DIRS.has(e.name));
+    const hasGitDir = entries.some(e => e.isDirectory() && e.name === '.git');
+    if (hasContextDir && hasGitDir) {
       const repo = await this.buildRepo(dirPath);
       if (repo) {
         repos.push(repo);
