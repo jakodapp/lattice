@@ -34,15 +34,20 @@ export function parseGitHubUrl(input: string): ParsedGitHubUrl | undefined {
     return { owner: shorthand[1], repo: shorthand[2] };
   }
 
-  // Full URL: https://github.com/owner/repo[.git][/tree/branch[/subpath]]
-  const urlPattern = /^https?:\/\/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?(?:\/tree\/([^/]+)(?:\/(.+))?)?$/;
+  // Full URL: https://github.com/owner/repo[.git][/(tree|blob)/branch[/subpath]]
+  const urlPattern = /^https?:\/\/github\.com\/([a-zA-Z0-9_.-]+)\/([a-zA-Z0-9_.-]+?)(?:\.git)?(?:\/(?:tree|blob)\/([^/]+)(?:\/(.+))?)?$/;
   const match = urlPattern.exec(trimmed);
   if (match) {
+    let subpath: string | undefined = match[4];
+    // Strip SKILL.md from blob URLs — user wants the skill directory, not the file
+    if (subpath) {
+      subpath = subpath.replace(/\/?SKILL\.md$/, '') || undefined;
+    }
     return {
       owner: match[1],
       repo: match[2],
       branch: match[3],
-      subpath: match[4],
+      subpath,
     };
   }
 
