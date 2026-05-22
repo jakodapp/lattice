@@ -1,7 +1,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import { Asset, AssetGroup, Repo } from './types';
-import { getErrorMessage } from './constants';
+import { getErrorMessage, HIDDEN_ASSET_TYPES } from './constants';
 import { expandHome } from './services/config';
 import { Scanner } from './services/scanner';
 import { Watcher } from './services/watcher';
@@ -9,7 +9,7 @@ import { buildAssetGroups } from './services/sync-detector';
 import { readVscodeConfig } from './vscode-adapter';
 import { ContextStore } from './services/context-store';
 import { LatticeGit } from './services/lattice-git';
-import { saveCliConfig } from './cli/cli-config';
+import { loadCliConfig, saveCliConfig } from './cli/cli-config';
 import { openFile } from './commands/open-file';
 import { diffWith } from './commands/diff-with';
 import { copyToRepo } from './commands/copy-to-repo';
@@ -85,8 +85,10 @@ export function activate(context: vscode.ExtensionContext) {
       const currentRepo = workspacePath ? store.repos.find(r => r.path === workspacePath) : undefined;
       watcher.watchRepos(currentRepo ? [currentRepo] : []);
 
-      const localAssetCount = currentRepo ? currentRepo.assets.length : 0;
-      statusBar.text = `$(layout) Lattice (${localAssetCount} assets)`;
+      const localAssetCount = currentRepo
+        ? currentRepo.assets.filter(a => !HIDDEN_ASSET_TYPES.has(a.type)).length
+        : 0;
+      statusBar.text = `$(layout) ${localAssetCount} assets`;
     } catch (err) {
       statusBar.text = '$(error) LCM: Scan failed';
       vscode.window.showErrorMessage(`LCM scan failed: ${getErrorMessage(err)}`);
@@ -196,9 +198,19 @@ async function ensureLatticeStore(config: import('./services/config').LatticeCon
   const latticeDir = path.join(canonicalExpanded, '.lattice');
 
   try {
-    // Persist extension config so CLI uses the same roots
-    // Must happen before ensureRepo() so config.json is included in init commit
-    await saveCliConfig(config);
+    // Persist VSCode-owned settings so CLI uses the same roots.
+    // Load existing config first to preserve lattice-managed fields (hiddenRepos),
+    // then overlay only the VSCode-owned fields.
+    const existing = await loadCliConfig();
+    await saveCliConfig({
+      ...existing,
+      roots: config.roots,
+      canonicalPath: config.canonicalPath,
+      maxDepth: config.maxDepth,
+      ignoreDirs: config.ignoreDirs,
+      scanGlobal: config.scanGlobal,
+      installMode: config.installMode,
+    });
 
     const git = new LatticeGit(latticeDir);
     await git.ensureRepo();

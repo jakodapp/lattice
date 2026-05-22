@@ -18,6 +18,9 @@ import { parseGitHubUrl, shallowClone, cleanupClone, getHeadCommit } from '../se
 import { discoverAssets, installDiscoveredAssets } from '../services/github-import';
 import { convertToSymlink } from '../services/convert-to-symlink';
 import { buildAssetGroups } from '../services/sync-detector';
+import { Scanner } from '../services/scanner';
+import { readVscodeConfig } from '../vscode-adapter';
+import { loadCliConfig, saveCliConfig } from '../cli/cli-config';
 import type { ConfigStore } from '../extension';
 
 function serializeAsset(a: Asset): SerializedAsset {
@@ -126,20 +129,30 @@ export class DashboardPanel {
     return roots.length > 0;
   }
 
+  private async _visibleRepos(): Promise<Repo[]> {
+    const cliConfig = await loadCliConfig();
+    const hiddenPaths = new Set(cliConfig.hiddenRepos);
+    return this._store.repos.filter(r => !hiddenPaths.has(r.path));
+  }
+
   refresh() {
     const hasRoots = this._hasRoots();
-    Promise.all(this._store.repos.map(serializeRepo)).then(repos =>
-      this._postMessage({ type: 'refresh', repos, hasRoots }),
+    this._visibleRepos().then(visible =>
+      Promise.all(visible.map(serializeRepo)).then(repos =>
+        this._postMessage({ type: 'refresh', repos, hasRoots }),
+      ),
     );
   }
 
   init(view: 'repo' | 'type' = 'repo') {
     const hasRoots = this._hasRoots();
     const workspacePath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const currentRepo = workspacePath ? this._store.repos.find(r => r.path === workspacePath)?.name : undefined;
-    Promise.all(this._store.repos.map(serializeRepo)).then(repos =>
-      this._postMessage({ type: 'init', repos, view, currentRepo, hasRoots }),
-    );
+    this._visibleRepos().then(visible => {
+      const currentRepo = workspacePath ? visible.find(r => r.path === workspacePath)?.name : undefined;
+      Promise.all(visible.map(serializeRepo)).then(repos =>
+        this._postMessage({ type: 'init', repos, view, currentRepo, hasRoots }),
+      );
+    });
   }
 
   // --- Path validation ---
@@ -191,7 +204,7 @@ export class DashboardPanel {
       case 'preview-asset': return this._handlePreviewAsset(msg);
       case 'copy-asset-pick': return this._handleCopyAssetPick(msg);
       case 'move-asset-pick': return this._handleMoveAssetPick(msg);
-      case 'add-repo': return this._handleAddRepo();
+      case 'add-repo': return this._handleAddRepo(msg);
       case 'forget-repo': return this._handleForgetRepo(msg);
       case 'copy-asset-to-repos': return this._handleCopyAssetToRepos(msg);
       case 'move-asset-to-repo': return this._handleMoveAssetToRepo(msg);
@@ -205,6 +218,9 @@ export class DashboardPanel {
       case 'convert-to-symlink-confirm': return this._handleConvertToSymlinkConfirm(msg);
       case 'add-root': return this._handleAddRoot(msg);
       case 'browse-root': return this._handleBrowseRoot();
+      case 'hide-repo': return this._handleHideRepo(msg);
+      case 'unhide-repo': return this._handleUnhideRepo(msg);
+      case 'discover-repos': return this._handleDiscoverRepos();
       case 'open-sidebar': break;
       case 'switch-view': break;
     }
@@ -947,18 +963,82 @@ export class DashboardPanel {
     await this._addRootToConfig(uri[0].fsPath);
   }
 
-  private async _handleAddRepo() {
-    const uri = await vscode.window.showOpenDialog({
-      canSelectFiles: false,
-      canSelectFolders: true,
-      canSelectMany: false,
-      openLabel: 'Add Repository',
-      title: 'Select a repository to add .claude/ folder',
-    });
+  private async _handleHideRepo(msg: Extract<ToExtension, { type: 'hide-repo' }>) {
+    const cliConfig = await loadCliConfig();
+    if (!cliConfig.hiddenRepos.includes(msg.repoPath)) {
+      cliConfig.hiddenRepos = [...cliConfig.hiddenRepos, msg.repoPath];
+      await saveCliConfig(cliConfig);
+      const repoName = this._store.repos.find(r => r.path === msg.repoPath)?.name ?? path.basename(msg.repoPath);
+      await this._commitConfigChange(`hide: ${repoName}`);
+    }
+    this.refresh();
+  }
 
-    if (!uri || uri.length === 0) {return;}
+  private async _handleUnhideRepo(msg: Extract<ToExtension, { type: 'unhide-repo' }>) {
+    const cliConfig = await loadCliConfig();
+    cliConfig.hiddenRepos = cliConfig.hiddenRepos.filter(p => p !== msg.repoPath);
+    await saveCliConfig(cliConfig);
+    const repoName = this._store.repos.find(r => r.path === msg.repoPath)?.name ?? path.basename(msg.repoPath);
+    await this._commitConfigChange(`unhide: ${repoName}`);
+    await this._onRefresh();
+    this.refresh();
+  }
 
-    const repoPath = uri[0].fsPath;
+  /** Commit config.json changes directly (bypasses context.json change gate) */
+  private async _commitConfigChange(commitMessage: string): Promise<void> {
+    const { canonicalBase } = this._getInstallOptions();
+    const expanded = expandHome(canonicalBase);
+    const latticeDir = path.join(expanded, '.lattice');
+    try {
+      const git = new LatticeGit(latticeDir);
+      await git.ensureRepo();
+      await git.commit(commitMessage);
+    } catch (err) {
+      console.debug('[LCM] Config commit failed:', getErrorMessage(err));
+    }
+  }
+
+  private async _handleDiscoverRepos() {
+    const cliConfig = await loadCliConfig();
+    const hiddenPaths = new Set(cliConfig.hiddenRepos);
+
+    // Hidden repos: cross-reference hidden paths with actual scanned repos
+    const hiddenRepos = this._store.repos
+      .filter(r => hiddenPaths.has(r.path))
+      .map(r => ({ name: r.name, path: r.path }));
+
+    // Uninitialized repos: git repos without a context folder
+    const scanner = new Scanner(readVscodeConfig());
+    const uninitializedRepos = await scanner.discoverGitRepos();
+
+    this._postMessage({ type: 'discovered-repos', hiddenRepos, uninitializedRepos });
+  }
+
+  private async _handleAddRepo(msg?: Extract<ToExtension, { type: 'add-repo' }>) {
+    let repoPath: string | undefined = msg?.repoPath;
+
+    if (!repoPath) {
+      const uri = await vscode.window.showOpenDialog({
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        openLabel: 'Add Repository',
+        title: 'Select a repository to add .claude/ folder',
+      });
+      if (!uri || uri.length === 0) return;
+      repoPath = uri[0].fsPath;
+    }
+    // Validate that the selected folder is a git repository
+    const gitDir = path.join(repoPath, '.git');
+    try {
+      await fs.access(gitDir);
+    } catch {
+      vscode.window.showWarningMessage(
+        `"${path.basename(repoPath)}" is not a git repository. Initialize a git repo first, then try again.`,
+      );
+      return;
+    }
+
     const claudeDir = path.join(repoPath, '.claude');
     try {
       await fs.mkdir(claudeDir, { recursive: true });

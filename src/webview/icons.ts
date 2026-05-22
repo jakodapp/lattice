@@ -15,6 +15,8 @@ import {
   ExternalLink,
   Replace,
   FolderOpen,
+  EyeOff,
+  Eye,
 } from 'lucide-static';
 
 function lucide(svgString: string, className?: string): TemplateResult {
@@ -39,3 +41,5 @@ export const iconConvertLink = (cls?: string) => lucide(Link2, cls);
 export const iconExternal = (cls?: string) => lucide(ExternalLink, cls);
 export const iconReplace = (cls?: string) => lucide(Replace, cls);
 export const iconFolderOpen = (cls?: string) => lucide(FolderOpen, cls);
+export const iconEyeOff = (cls?: string) => lucide(EyeOff, cls);
+export const iconEye = (cls?: string) => lucide(Eye, cls);

@@ -5,3 +5,4 @@ dist/
 .vscode/
 .e2e-workspace/
 *.DS_Store
+demo/*

@@ -67,6 +67,7 @@ Both are configured in `esbuild.config.mjs`. Changes to `src/webview/` only affe
 - Never import `vscode` in webview code — it's only available in the extension context
 - Asset colors are defined per-type using HSL with consistent saturation/lightness
 - The webview uses VSCode CSS variables (`--vscode-*`) for theme compatibility
+- Design context files (PRODUCT.md, DESIGN.md) live in `.claude/docs/`, not the project root. Any skill, command, or agent that needs these files should check `.claude/docs/` if they're not found at the root path.
 
 ## Reference Docs
 
@@ -79,3 +80,5 @@ Both are configured in `esbuild.config.mjs`. Changes to `src/webview/` only affe
 | `.claude/docs/03-services.md` | When modifying scanner, hasher, sync detection, or file operations |
 | `.claude/docs/04-views.md` | When changing dashboard views, detail panel, or activation flow |
 | `.claude/docs/05-ui-components.md` | When modifying or adding Lit webview components |
+| `.claude/docs/08-demo-recordings.md` | When writing demo scenarios, debugging the recording pipeline, or understanding the Playwright + CDP + screencapture architecture |
+| `.claude/docs/09-design-system.md` | When working with PRODUCT.md, DESIGN.md, or .impeccable/design.json — understanding the design context layer, token structure, or named rules |

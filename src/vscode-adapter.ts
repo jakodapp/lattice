@@ -13,6 +13,7 @@ export function readVscodeConfig(): LatticeConfig {
     ignoreDirs: config.get<string[]>('ignoreDirs', DEFAULT_CONFIG.ignoreDirs),
     scanGlobal: config.get<boolean>('scanGlobal', DEFAULT_CONFIG.scanGlobal),
     installMode: config.get<InstallMode>('installMode', DEFAULT_CONFIG.installMode),
+    hiddenRepos: DEFAULT_CONFIG.hiddenRepos,
   };
 }
 
