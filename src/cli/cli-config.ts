@@ -56,5 +56,14 @@ export async function saveCliConfig(config: LatticeConfig): Promise<void> {
   } catch { /* file doesn't exist yet */ }
 
   const merged = mergeLatticeConfig(config, existing);
-  await fs.writeFile(configPath, JSON.stringify(merged, null, 2), 'utf-8');
+  await fs.writeFile(configPath, JSON.stringify(merged, null, 2) + '\n', 'utf-8');
+}
+
+/** Write config directly without re-reading/merging. Use when the caller
+ *  has already loaded and modified the config (e.g. ensureLatticeStore). */
+export async function writeCliConfigDirect(config: LatticeConfig): Promise<void> {
+  const latticeDir = getLatticeDir(config.canonicalPath);
+  await fs.mkdir(latticeDir, { recursive: true });
+  const configPath = path.join(latticeDir, 'config.json');
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2) + '\n', 'utf-8');
 }

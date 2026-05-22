@@ -469,7 +469,8 @@ export class DashboardPanel {
       items = await fs.readdir(dirPath, { withFileTypes: true });
     } catch { return []; }
 
-    items = items.filter(i => !i.name.startsWith('.') && i.name !== THUMBS_DB);
+    // Allow dot-prefixed directories when scanning skills (category folders like .curated/)
+    items = items.filter(i => i.name !== THUMBS_DB && (!i.name.startsWith('.') || isSkillDir));
     const entries: FileEntry[] = [];
 
     if (isSkillDir) {
@@ -481,7 +482,9 @@ export class DashboardPanel {
             const content = await fs.readFile(skillMdPath, 'utf-8');
             entries.push({ name: item.name, path: skillMdPath, preview: truncatePreview(content) });
           } catch {
-            entries.push({ name: item.name, path: itemPath, preview: '(No SKILL.md found)' });
+            // No SKILL.md — recurse into it as a category folder
+            const nested = await this._readAssetDir(itemPath, true);
+            entries.push(...nested);
           }
         } else if (item.isFile() && (item.name.endsWith('.md') || item.name.endsWith('.js'))) {
           const content = await fs.readFile(itemPath, 'utf-8');
@@ -747,8 +750,8 @@ export class DashboardPanel {
 
   private async _handleImportFromGithub() {
     const url = await vscode.window.showInputBox({
-      prompt: 'Enter a GitHub repository URL',
-      placeHolder: 'https://github.com/owner/repo or owner/repo',
+      prompt: 'Enter a GitHub repository URL or path to a skill',
+      placeHolder: 'https://github.com/owner/repo/tree/branch/skills/my-skill',
       validateInput: (value) => {
         if (!value.trim()) return 'URL is required';
         if (!parseGitHubUrl(value)) return 'Invalid GitHub URL format';
@@ -757,12 +760,14 @@ export class DashboardPanel {
     });
     if (!url) return;
 
+    const parsed = parseGitHubUrl(url);
+
     try {
       const result = await vscode.window.withProgress(
         { location: vscode.ProgressLocation.Notification, title: 'Cloning repository...' },
         async () => {
           const clone = await shallowClone(url);
-          const assets = await discoverAssets(clone.localPath);
+          const assets = await discoverAssets(clone.localPath, parsed?.subpath);
           return { clone, assets };
         },
       );
@@ -784,7 +789,8 @@ export class DashboardPanel {
   }
 
   private async _handleInstallGithubAssets(msg: Extract<ToExtension, { type: 'install-github-assets' }>) {
-    const discovered = await discoverAssets(msg.clonePath);
+    const parsedSource = parseGitHubUrl(msg.sourceUrl);
+    const discovered = await discoverAssets(msg.clonePath, parsedSource?.subpath);
     const selected = discovered.filter(a => msg.assetPaths.includes(a.sourcePath));
     const targets = msg.targetRepoNames
       .map(n => this._store.repos.find(r => r.name === n))

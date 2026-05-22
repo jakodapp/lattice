@@ -9,7 +9,7 @@ import { buildAssetGroups } from './services/sync-detector';
 import { readVscodeConfig } from './vscode-adapter';
 import { ContextStore } from './services/context-store';
 import { LatticeGit } from './services/lattice-git';
-import { loadCliConfig, saveCliConfig } from './cli/cli-config';
+import { loadCliConfig, writeCliConfigDirect } from './cli/cli-config';
 import { openFile } from './commands/open-file';
 import { diffWith } from './commands/diff-with';
 import { copyToRepo } from './commands/copy-to-repo';
@@ -200,9 +200,9 @@ async function ensureLatticeStore(config: import('./services/config').LatticeCon
   try {
     // Persist VSCode-owned settings so CLI uses the same roots.
     // Load existing config first to preserve lattice-managed fields (hiddenRepos),
-    // then overlay only the VSCode-owned fields.
+    // then overlay only the VSCode-owned fields and write directly (no re-read merge).
     const existing = await loadCliConfig();
-    await saveCliConfig({
+    await writeCliConfigDirect({
       ...existing,
       roots: config.roots,
       canonicalPath: config.canonicalPath,
