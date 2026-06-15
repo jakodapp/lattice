@@ -1,21 +1,27 @@
 import * as vscode from 'vscode';
 import * as fs from 'fs/promises';
 import * as path from 'path';
-import { Asset, Repo } from '../types';
+import { Asset, AssetType, Repo, ASSET_TYPE_LABELS, TYPE_TO_DIR, buildSymlinkTargets } from '../types';
 import { SKILL_MD, CLAUDE_MD, SETTINGS_JSON, SETTINGS_LOCAL_JSON, THUMBS_DB, getErrorMessage, truncatePreview, displayHash } from '../constants';
 import { copyAsset, deleteAsset } from '../services/file-ops';
 import { installAsset } from '../services/symlink-ops';
 import { isSymlinkToDir } from '../services/fs-utils';
 import { expandHome } from '../services/config';
 import { copyAssetToRepos, moveAssetToRepo, installCanonicalToRepos, deleteCanonicalAsset, findAffectedSymlinks, getDeleteWarning } from '../services/asset-operations';
+import { exportAssetToAgents } from '../services/agent-export';
 import { showResult } from '../vscode-adapter';
 import { ContextStore } from '../services/context-store';
 import { LatticeGit } from '../services/lattice-git';
 import { CcmError } from '../errors';
 import { extractPreview } from '../services/preview-extractor';
-import { ToExtension, ToWebview, SerializedRepo, SerializedAsset, FileEntry, FileGroup, VersionOption, isContextFile } from '../webview/types';
-import { parseGitHubUrl, shallowClone, cleanupClone, getHeadCommit } from '../services/git-ops';
+import { ToExtension, ToWebview, SerializedRepo, SerializedAsset, FileEntry, FileGroup, VersionOption, isContextFile, GLOBAL_MERGED_NAME } from '../webview/types';
+import { parseGitHubUrl, shallowClone, cleanupClone, getHeadCommit, getCurrentBranch } from '../services/git-ops';
 import { discoverAssets, installDiscoveredAssets } from '../services/github-import';
+import { checkForUpdates } from '../services/update-checker';
+import { hashDirectory, hashFile } from '../services/hasher';
+import { getAgent } from '../services/agent-registry';
+import { AgentDef, DEFAULT_TOOL } from '../services/agent-defs';
+import { AgentSelection } from '../services/agent-selection';
 import { convertToSymlink } from '../services/convert-to-symlink';
 import { buildAssetGroups } from '../services/sync-detector';
 import { Scanner } from '../services/scanner';
@@ -32,6 +38,8 @@ function serializeAsset(a: Asset): SerializedAsset {
     hash: a.hash,
     repoName: a.repoName,
     isSymlink: a.isSymlink,
+    canonicalPath: a.canonicalPath,
+    tool: a.tool,
   };
 }
 
@@ -59,7 +67,10 @@ async function serializeAssetWithPreview(a: Asset): Promise<SerializedAsset> {
 }
 
 async function serializeRepo(r: Repo): Promise<SerializedRepo> {
-  const assets = await Promise.all(r.assets.map(serializeAssetWithPreview));
+  // Skip assets already reachable via a .claude/ symlink — avoids duplicate chips.
+  const symlinkTargets = buildSymlinkTargets(r.assets);
+  const deduped = r.assets.filter(a => !symlinkTargets.has(a.path));
+  const assets = await Promise.all(deduped.map(serializeAssetWithPreview));
   if (r.isCanonical) {
     for (const a of assets) { a.isCanonical = true; }
   }
@@ -84,6 +95,7 @@ export class DashboardPanel {
     private _extensionUri: vscode.Uri,
     private _store: ConfigStore,
     private _onRefresh: () => Promise<void>,
+    private _agentSelection: AgentSelection,
   ) {
     this._panel = panel;
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
@@ -99,6 +111,7 @@ export class DashboardPanel {
     extensionUri: vscode.Uri,
     store: ConfigStore,
     onRefresh: () => Promise<void>,
+    agentSelection: AgentSelection,
   ) {
     const column = vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.One;
 
@@ -120,7 +133,7 @@ export class DashboardPanel {
     );
 
     panel.iconPath = vscode.Uri.joinPath(extensionUri, 'resources', 'logo.png');
-    DashboardPanel._instance = new DashboardPanel(panel, extensionUri, store, onRefresh);
+    DashboardPanel._instance = new DashboardPanel(panel, extensionUri, store, onRefresh, agentSelection);
   }
 
   private _hasRoots(): boolean {
@@ -139,7 +152,7 @@ export class DashboardPanel {
     const hasRoots = this._hasRoots();
     this._visibleRepos().then(visible =>
       Promise.all(visible.map(serializeRepo)).then(repos =>
-        this._postMessage({ type: 'refresh', repos, hasRoots }),
+        this._postMessage({ type: 'refresh', repos, hasRoots, selectedAgent: this._agentSelection.id }),
       ),
     );
   }
@@ -150,7 +163,7 @@ export class DashboardPanel {
     this._visibleRepos().then(visible => {
       const currentRepo = workspacePath ? visible.find(r => r.path === workspacePath)?.name : undefined;
       Promise.all(visible.map(serializeRepo)).then(repos =>
-        this._postMessage({ type: 'init', repos, view, currentRepo, hasRoots }),
+        this._postMessage({ type: 'init', repos, view, currentRepo, hasRoots, selectedAgent: this._agentSelection.id }),
       );
     });
   }
@@ -177,14 +190,16 @@ export class DashboardPanel {
 
   private _findAsset(assetPath: string, repoName: string): { asset: Asset; repo: Repo } | undefined {
     const repo = this._store.repos.find(r => r.name === repoName);
-    const asset = repo?.assets.find(a => a.path === assetPath);
+    const resolved = assetPath.endsWith(`/${SKILL_MD}`) ? path.dirname(assetPath) : assetPath;
+    const asset = repo?.assets.find(a => a.path === assetPath || a.path === resolved);
     if (asset && repo) {return { asset, repo };}
     return undefined;
   }
 
   private _findAssetAcrossRepos(assetPath: string): { asset: Asset; repo: Repo } | undefined {
+    const resolved = assetPath.endsWith(`/${SKILL_MD}`) ? path.dirname(assetPath) : assetPath;
     for (const repo of this._store.repos) {
-      const asset = repo.assets.find(a => a.path === assetPath);
+      const asset = repo.assets.find(a => a.path === assetPath || a.path === resolved);
       if (asset) {return { asset, repo };}
     }
     return undefined;
@@ -221,6 +236,10 @@ export class DashboardPanel {
       case 'hide-repo': return this._handleHideRepo(msg);
       case 'unhide-repo': return this._handleUnhideRepo(msg);
       case 'discover-repos': return this._handleDiscoverRepos();
+      case 'check-updates': return this._handleCheckUpdates();
+      case 'update-asset': return this._handleUpdateAsset(msg);
+      case 'export-to-agents': return this._handleExportToAgents(msg);
+      case 'set-agent': return this._agentSelection.set(msg.agentId);
       case 'open-sidebar': break;
       case 'switch-view': break;
     }
@@ -259,12 +278,11 @@ export class DashboardPanel {
     assets: import('../services/github-import').DiscoveredAsset[],
     sourceUrl: string,
     commitHash: string,
+    ref: string,
+    subpath?: string,
   ): Promise<void> {
-    const { canonicalBase } = this._getInstallOptions();
-    const expanded = expandHome(canonicalBase[0]);
-    const latticeDir = path.join(expanded, '.lattice');
     try {
-      const store = new ContextStore(latticeDir);
+      const store = new ContextStore(this._latticeDir());
       await store.load();
       for (const asset of assets) {
         const existing = store.data.assets.find(a => a.name === asset.name && a.type === asset.type);
@@ -274,7 +292,8 @@ export class DashboardPanel {
             source: {
               url: sourceUrl,
               commitHash,
-              ref: 'main',
+              ref,
+              subpath,
               fetchedAt: new Date().toISOString(),
             },
           });
@@ -286,11 +305,17 @@ export class DashboardPanel {
     }
   }
 
-  private _getInstallOptions(): { canonicalBase: string[]; copyFn: typeof copyAsset } {
+  private _latticeDir(): string {
+    const { canonicalBase } = this._getInstallOptions();
+    return path.join(expandHome(canonicalBase[0]), '.lattice');
+  }
+
+  private _getInstallOptions(): { canonicalBase: string[]; copyFn: typeof copyAsset; agent: AgentDef } {
     const config = vscode.workspace.getConfiguration('latticeContextManager');
     return {
       canonicalBase: config.get<string[]>('canonicalPaths', ['~/.assets', '~/.agents']),
       copyFn: copyAsset,
+      agent: this._agentSelection.def,
     };
   }
 
@@ -386,7 +411,7 @@ export class DashboardPanel {
   }
 
   /** Delete an asset from all non-canonical repos (best-effort per repo) */
-  private async _deleteFromAllRepos(assetName: string, assetType: import('../types').AssetType): Promise<void> {
+  private async _deleteFromAllRepos(assetName: string, assetType: AssetType): Promise<void> {
     const targets = this._store.repos
       .filter(r => !r.isCanonical)
       .flatMap(r => r.assets)
@@ -422,7 +447,10 @@ export class DashboardPanel {
   }
 
   private async _handleOpenDetail(msg: Extract<ToExtension, { type: 'open-detail' }>) {
-    const repo = this._store.repos.find(r => r.name === msg.repoName);
+    // Note: a project repo literally named "GLOBAL" is shadowed by the merged view here
+    const repo = msg.repoName === GLOBAL_MERGED_NAME
+      ? this._buildMergedGlobalRepo()
+      : this._store.repos.find(r => r.name === msg.repoName);
     if (!repo) return;
 
     const fileGroups = await this._buildFileGroups(repo);
@@ -431,22 +459,62 @@ export class DashboardPanel {
     this._postMessage({ type: 'detail', repo: await serializeRepo(repo), fileGroups, claudeMdFiles });
   }
 
+  /** Synthetic repo backing the merged GLOBAL column; assets keep their real repoName */
+  private _buildMergedGlobalRepo(): Repo | undefined {
+    const globals = this._store.repos.filter(r => r.isGlobal);
+    if (globals.length === 0) return undefined;
+    const claudeGlobal = globals.find(r => r.name === '~/.claude');
+    return {
+      name: GLOBAL_MERGED_NAME,
+      path: process.env.HOME ?? '',
+      claudePath: claudeGlobal?.claudePath ?? expandHome('~/.claude'),
+      assets: globals.flatMap(r => r.assets),
+      isGlobal: true,
+    };
+  }
+
   private async _buildFileGroups(repo: Repo): Promise<FileGroup[]> {
     const fileGroups: FileGroup[] = [];
-    const knownDirs = [
-      { dir: 'skills', label: 'Skills', isSkillDir: true },
-      { dir: 'agents', label: 'Agents' },
-      { dir: 'commands', label: 'Commands' },
-      { dir: 'hooks', label: 'Hooks' },
-      { dir: 'rules', label: 'Rules' },
-      { dir: 'output-styles', label: 'Output Styles' },
-      { dir: 'scripts', label: 'Scripts' },
-      { dir: 'docs', label: 'Docs' },
+    const knownDirs: Array<{ dir: string; label: string; isSkillDir?: boolean }> = [
+      { dir: TYPE_TO_DIR.skill!,           label: ASSET_TYPE_LABELS.skill,           isSkillDir: true },
+      { dir: TYPE_TO_DIR.agent!,           label: ASSET_TYPE_LABELS.agent },
+      { dir: TYPE_TO_DIR.command!,         label: ASSET_TYPE_LABELS.command },
+      { dir: TYPE_TO_DIR.hook!,            label: ASSET_TYPE_LABELS.hook },
+      { dir: TYPE_TO_DIR.rule!,            label: ASSET_TYPE_LABELS.rule },
+      { dir: TYPE_TO_DIR['output-style']!, label: ASSET_TYPE_LABELS['output-style'] },
+      { dir: TYPE_TO_DIR.script!,          label: ASSET_TYPE_LABELS.script },
+      { dir: 'docs',                       label: 'Docs' },
     ];
 
     for (const { dir, label, isSkillDir } of knownDirs) {
       const entries = await this._readAssetDir(path.join(repo.claudePath, dir), isSkillDir);
       if (entries.length > 0) { fileGroups.push({ label, entries }); }
+    }
+
+    // Assets owned by other tools (.cursor, .codex, .agents, ...), grouped per tool.
+    // Skip assets already reachable via a .claude/ symlink — they appear in knownDirs above.
+    const symlinkTargets = buildSymlinkTargets(repo.assets);
+    const byTool = new Map<string, Asset[]>();
+    for (const a of repo.assets) {
+      if (!a.tool || symlinkTargets.has(a.path)) continue;
+      const list = byTool.get(a.tool) ?? [];
+      list.push(a);
+      byTool.set(a.tool, list);
+    }
+    for (const [tool, list] of byTool) {
+      const entries: FileEntry[] = [];
+      for (const a of list) {
+        const filePath = a.isDirectory ? path.join(a.path, SKILL_MD) : a.path;
+        let preview = '';
+        try {
+          preview = truncatePreview(await fs.readFile(filePath, 'utf-8'));
+        } catch {
+          preview = '(Unable to read)';
+        }
+        entries.push({ name: a.name, path: filePath, preview });
+      }
+      const label = getAgent(tool)?.displayName ?? tool;
+      fileGroups.push({ label, entries });
     }
 
     // Special files at .claude/ root (settings)
@@ -474,6 +542,7 @@ export class DashboardPanel {
     const entries: FileEntry[] = [];
 
     if (isSkillDir) {
+      // Only directories with SKILL.md are valid skills — loose files are ignored
       for (const item of items) {
         const itemPath = path.join(dirPath, item.name);
         const isDir = item.isDirectory() || (item.isSymbolicLink() && await isSymlinkToDir(itemPath));
@@ -483,15 +552,12 @@ export class DashboardPanel {
             const content = await fs.readFile(skillMdPath, 'utf-8');
             entries.push({ name: item.name, path: skillMdPath, preview: truncatePreview(content) });
           } catch {
-            // No SKILL.md — recurse into it as a category folder
+            // No SKILL.md — recurse into subdirectories as category folders
             const nested = await this._readAssetDir(itemPath, true);
             entries.push(...nested);
           }
-        } else if ((item.isFile() || item.isSymbolicLink()) && (item.name.endsWith('.md') || item.name.endsWith('.js'))) {
-          const content = await fs.readFile(itemPath, 'utf-8');
-          const name = item.name.replace(/\.(md|js)$/, '');
-          entries.push({ name, path: itemPath, preview: truncatePreview(content) });
         }
+        // Files directly under skills/ are not valid assets — skip them
       }
     } else {
       for (const item of items) {
@@ -528,6 +594,14 @@ export class DashboardPanel {
         const content = await fs.readFile(rootClaudeMd, 'utf-8');
         files.push({ name: 'CLAUDE.md (root)', path: rootClaudeMd, preview: truncatePreview(content) });
       } catch { /* not present */ }
+    }
+
+    // Root-level instruction files from other conventions (AGENTS.md, GEMINI.md, legacy rule files)
+    for (const a of repo.assets.filter(x => x.type === 'instructions')) {
+      try {
+        const content = await fs.readFile(a.path, 'utf-8');
+        files.push({ name: a.name, path: a.path, preview: truncatePreview(content) });
+      } catch { /* not readable */ }
     }
     return files;
   }
@@ -689,7 +763,7 @@ export class DashboardPanel {
   private async _handleCopyAssetToRepos(msg: Extract<ToExtension, { type: 'copy-asset-to-repos' }>) {
     const source = this._findAssetAcrossRepos(msg.assetPath);
     if (!source) return;
-    const targets = msg.targetRepoNames.map(n => this._store.repos.find(r => r.name === n)).filter((r): r is import('../types').Repo => !!r);
+    const targets = msg.targetRepoNames.map(n => this._store.repos.find(r => r.name === n)).filter((r): r is Repo => !!r);
     const result = await copyAssetToRepos(source.asset, targets, this._getInstallOptions());
     showResult(result);
     await this._onRefresh();
@@ -720,9 +794,9 @@ export class DashboardPanel {
       if (asset) break;
     }
     if (!asset) return;
-    const targets = msg.targetRepoNames.map(n => this._store.repos.find(r => r.name === n)).filter((r): r is import('../types').Repo => !!r);
+    const targets = msg.targetRepoNames.map(n => this._store.repos.find(r => r.name === n)).filter((r): r is Repo => !!r);
     const canonicalBases = canonicalRepos.map(r => r.path);
-    const result = await installCanonicalToRepos(asset, targets, canonicalBases);
+    const result = await installCanonicalToRepos(asset, targets, canonicalBases, this._agentSelection.def);
     showResult(result);
     await this._onRefresh();
     this.refresh();
@@ -807,15 +881,16 @@ export class DashboardPanel {
       .filter((r): r is Repo => !!r);
 
     try {
-      // Capture commit hash before cleanup
+      // Capture commit hash and branch before cleanup
       const commitHash = await getHeadCommit(msg.clonePath).catch(() => 'unknown');
+      const ref = parsedSource?.branch ?? await getCurrentBranch(msg.clonePath).catch(() => 'main');
       const count = await installDiscoveredAssets(selected, targets, this._getInstallOptions());
       vscode.window.showInformationMessage(`Installed ${count} asset(s) successfully.`);
       await this._onRefresh();
       this.refresh();
 
       // Write GitHub source metadata to context store
-      await this._trackGitHubSource(selected, msg.sourceUrl, commitHash);
+      await this._trackGitHubSource(selected, msg.sourceUrl, commitHash, ref, parsedSource?.subpath);
       await this._trackChange(`github-install: ${selected.map(a => a.name).join(', ')} from ${msg.sourceUrl}`);
     } catch (err) {
       vscode.window.showErrorMessage(`Install failed: ${getErrorMessage(err)}`);
@@ -826,6 +901,150 @@ export class DashboardPanel {
 
   private async _handleCleanupClone(msg: Extract<ToExtension, { type: 'cleanup-clone' }>) {
     await cleanupClone(msg.clonePath);
+  }
+
+  // --- GitHub update handlers ---
+
+  /** Lightweight background check: one ls-remote per source, never blocks or surfaces errors */
+  private async _handleCheckUpdates() {
+    try {
+      const store = new ContextStore(this._latticeDir());
+      await store.load();
+      const updates = await checkForUpdates(store.getGitHubAssets());
+      this._postMessage({
+        type: 'update-status',
+        updates: updates.map(u => ({ name: u.name, type: u.type, remoteCommit: u.remoteCommit })),
+      });
+    } catch (err) {
+      console.debug('[LCM] Update check failed:', getErrorMessage(err));
+    }
+  }
+
+  private async _handleUpdateAsset(msg: Extract<ToExtension, { type: 'update-asset' }>) {
+    const store = new ContextStore(this._latticeDir());
+    await store.load();
+    const tracked = store.data.assets.find(a => a.name === msg.assetName && a.type === msg.assetType);
+    if (!tracked?.source) {
+      vscode.window.showWarningMessage(`No GitHub source recorded for "${msg.assetName}".`);
+      return;
+    }
+    const source = tracked.source;
+
+    let clonePath: string | undefined;
+    try {
+      const result = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: `Updating "${msg.assetName}" from ${source.url}...` },
+        async () => {
+          const clone = await shallowClone(source.url, source.ref);
+          const parsed = parseGitHubUrl(source.url);
+          const discovered = await discoverAssets(clone.localPath, source.subpath ?? parsed?.subpath);
+          return { clone, discovered };
+        },
+      );
+      clonePath = result.clone.localPath;
+
+      const upstream = result.discovered.find(a => a.name === msg.assetName && a.type === msg.assetType);
+      if (!upstream) {
+        vscode.window.showWarningMessage(`"${msg.assetName}" no longer exists upstream in ${source.url}.`);
+        return;
+      }
+
+      const newCommit = await getHeadCommit(clonePath).catch(() => 'unknown');
+      const upstreamAsset: Asset = {
+        name: upstream.name,
+        type: upstream.type,
+        path: upstream.sourcePath,
+        isDirectory: upstream.isDirectory,
+        hash: upstream.isDirectory ? await hashDirectory(upstream.sourcePath) : await hashFile(upstream.sourcePath),
+        repoName: '_github-update',
+      };
+
+      const { updated, kept } = await this._applyAssetUpdates(msg.assetName, msg.assetType, upstreamAsset, tracked.canonicalHash);
+
+      tracked.source = { ...source, commitHash: newCommit, fetchedAt: new Date().toISOString() };
+      store.trackAsset(tracked);
+      await store.save();
+
+      await this._onRefresh();
+      this.refresh();
+      await this._trackChange(`github-update: ${msg.assetName} → ${displayHash(newCommit)}`);
+
+      const keptNote = kept > 0 ? `, kept local changes in ${kept}` : '';
+      const message = updated > 0
+        ? `Updated "${msg.assetName}" in ${updated} location(s)${keptNote}.`
+        : kept > 0
+          ? `Kept local changes for "${msg.assetName}"; source metadata refreshed.`
+          : `"${msg.assetName}" already matches upstream; source metadata refreshed.`;
+      vscode.window.showInformationMessage(message);
+      await this._handleCheckUpdates();
+    } catch (err) {
+      vscode.window.showErrorMessage(`Update failed: ${getErrorMessage(err)}`);
+    } finally {
+      if (clonePath) {
+        await cleanupClone(clonePath);
+      }
+    }
+  }
+
+  /** Symlinked installs follow their canonical source, so only real copies are replaced */
+  private async _applyAssetUpdates(
+    assetName: string,
+    assetType: AssetType,
+    upstreamAsset: Asset,
+    canonicalHash: string | undefined,
+  ): Promise<{ updated: number; kept: number }> {
+    const instances = this._store.repos
+      .flatMap(repo => repo.assets
+        .filter(a => a.name === assetName && a.type === assetType && !a.isSymlink)
+        .map(a => ({ repo, asset: a })));
+    let updated = 0;
+    let kept = 0;
+    for (const { repo, asset } of instances) {
+      if (asset.hash === upstreamAsset.hash) continue;
+      const modifiedLocally = asset.hash !== canonicalHash;
+      if (modifiedLocally && !await this._confirmOverwriteModified(asset, upstreamAsset, repo.name)) {
+        kept++;
+        continue;
+      }
+      // Delete-then-copy so files removed upstream don't survive a directory merge.
+      // The update lands where the instance lived, not in the selected agent's dir.
+      await deleteAsset(asset);
+      await copyAsset(upstreamAsset, repo, getAgent(asset.tool ?? DEFAULT_TOOL));
+      updated++;
+    }
+    return { updated, kept };
+  }
+
+  private async _handleExportToAgents(msg: Extract<ToExtension, { type: 'export-to-agents' }>) {
+    const found = this._findAsset(msg.assetPath, msg.assetRepoName) ?? this._findAssetAcrossRepos(msg.assetPath);
+    if (!found) {
+      vscode.window.showWarningMessage('Asset not found. Try refreshing the dashboard.');
+      return;
+    }
+    const isGlobalScope = found.repo.isGlobal || found.repo.isCanonical;
+    const result = await exportAssetToAgents(found.asset, { repo: isGlobalScope ? undefined : found.repo }, msg.targetAgentIds);
+    showResult(result);
+    await this._onRefresh();
+    this.refresh();
+    await this._trackChange(`export: ${found.asset.name} → ${msg.targetAgentIds.join(', ')}`);
+  }
+
+  /** Show a diff of local vs upstream, then ask whether to overwrite */
+  private async _confirmOverwriteModified(local: Asset, upstream: Asset, repoName: string): Promise<boolean> {
+    const localUri = vscode.Uri.file(local.isDirectory ? path.join(local.path, SKILL_MD) : local.path);
+    const upstreamUri = vscode.Uri.file(upstream.isDirectory ? path.join(upstream.path, SKILL_MD) : upstream.path);
+    try {
+      await vscode.commands.executeCommand('vscode.diff', localUri, upstreamUri, `${local.name}: local (${repoName}) ↔ upstream`);
+    } catch (err) {
+      console.debug('[LCM] Diff preview failed:', getErrorMessage(err));
+    }
+    const choice = await vscode.window.showWarningMessage(
+      `"${local.name}" in ${repoName} was modified after import. Overwrite it with the upstream version?`,
+      { modal: true },
+      'Overwrite',
+      'Keep Local',
+    );
+    return choice === 'Overwrite';
   }
 
   // --- Diff handler ---
@@ -1033,13 +1252,14 @@ export class DashboardPanel {
   private async _handleAddRepo(msg?: Extract<ToExtension, { type: 'add-repo' }>) {
     let repoPath: string | undefined = msg?.repoPath;
 
+    const configDir = this._agentSelection.def.configDir;
     if (!repoPath) {
       const uri = await vscode.window.showOpenDialog({
         canSelectFiles: false,
         canSelectFolders: true,
         canSelectMany: false,
         openLabel: 'Add Repository',
-        title: 'Select a repository to add .claude/ folder',
+        title: `Select a repository to add ${configDir}/ folder`,
       });
       if (!uri || uri.length === 0) return;
       repoPath = uri[0].fsPath;
@@ -1055,20 +1275,14 @@ export class DashboardPanel {
       return;
     }
 
-    const claudeDir = path.join(repoPath, '.claude');
+    // Create only the selected agent's config dir; subdirs are created lazily on write
     try {
-      await fs.mkdir(claudeDir, { recursive: true });
-      await Promise.all([
-        fs.mkdir(path.join(claudeDir, 'skills'), { recursive: true }),
-        fs.mkdir(path.join(claudeDir, 'commands'), { recursive: true }),
-        fs.mkdir(path.join(claudeDir, 'agents'), { recursive: true }),
-        fs.mkdir(path.join(claudeDir, 'rules'), { recursive: true }),
-      ]);
-      vscode.window.showInformationMessage(`Created .claude/ in ${path.basename(repoPath)}`);
+      await fs.mkdir(path.join(repoPath, configDir), { recursive: true });
+      vscode.window.showInformationMessage(`Created ${configDir}/ in ${path.basename(repoPath)}`);
       await this._onRefresh();
       this.refresh();
     } catch (err) {
-      vscode.window.showErrorMessage(`Failed to create .claude/: ${getErrorMessage(err)}`);
+      vscode.window.showErrorMessage(`Failed to create ${configDir}/: ${getErrorMessage(err)}`);
     }
   }
 

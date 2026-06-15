@@ -15,4 +15,9 @@ tsconfig.json
 esbuild.config.mjs
 **/*.map
 **/*.ts
-!dist/**
+specs/**
+
+# Ship only the runtime bundles; cli.js is a separate `lattice` bin, unused by the extension
+dist/**
+!dist/extension.js
+!dist/webview.js

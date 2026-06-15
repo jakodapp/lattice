@@ -5,8 +5,14 @@ import { marked } from 'marked';
 import hljs from 'highlight.js/lib/core';
 import javascript from 'highlight.js/lib/languages/javascript';
 import json from 'highlight.js/lib/languages/json';
-import { FileEntry, FileGroup, SerializedRepo } from '../types';
-import { iconExternal, iconCopy, iconTrash, iconLink } from '../icons';
+import { FileEntry, FileGroup, SerializedAsset, SerializedRepo, isContextFile } from '../types';
+import { iconExternal, iconCopy, iconTrash, iconLink, iconWarning, iconUpdate, iconInstall, iconExport } from '../icons';
+import { SKILL_MD } from '../../constants';
+
+function stripSkillMd(p: string): string {
+  const suffix = `/${SKILL_MD}`;
+  return p.endsWith(suffix) ? p.slice(0, -suffix.length) : p;
+}
 
 hljs.registerLanguage('javascript', javascript);
 hljs.registerLanguage('json', json);
@@ -24,10 +30,16 @@ export class DetailPanel extends LitElement {
   @property({ type: Object }) navigateToFile: FileEntry | null = null;
   /** Repo names where the current asset is installed (for asset preview) */
   @property({ type: Array }) assetRepos: string[] = [];
+  /** Asset paths that are diverged from the majority hash */
+  @property({ type: Object }) divergedPaths: Set<string> = new Set();
+  /** Full asset metadata for the currently viewed file (null for plain context files) */
+  @property({ type: Object }) viewingAsset: SerializedAsset | null = null;
+  /** True when the viewed asset's GitHub source has newer commits upstream */
+  @property({ type: Boolean }) updateAvailable = false;
 
   @state() private _mode: PanelMode = 'detail';
   @state() private _viewingFile: FileEntry | null = null;
-  @state() private _width = Math.max(480, window.innerWidth * 0.6);
+  @state() private _width = Math.max(480, window.innerWidth * 0.7);
   @state() private _dragging = false;
 
   private static readonly SPLIT_THRESHOLD = 700;
@@ -316,6 +328,14 @@ export class DetailPanel extends LitElement {
       opacity: 0.5;
     }
 
+    .warn-icon {
+      width: 12px;
+      height: 12px;
+      flex-shrink: 0;
+      color: #EAB308;
+      opacity: 0.8;
+    }
+
     .file-row::after {
       content: '→';
       opacity: 0;
@@ -437,6 +457,21 @@ export class DetailPanel extends LitElement {
       height: 14px;
     }
 
+    .action-btn.install-btn svg,
+    .action-btn.update-btn svg {
+      width: 14px;
+      height: 14px;
+    }
+
+    .action-btn.update-btn {
+      background: rgba(34, 197, 94, 0.15);
+      color: #22c55e;
+    }
+
+    .action-btn.update-btn:hover {
+      background: rgba(34, 197, 94, 0.3);
+    }
+
     .action-btn.danger-icon {
       opacity: 0.5;
     }
@@ -487,6 +522,10 @@ export class DetailPanel extends LitElement {
       padding: 8px 16px;
       border-bottom: 1px solid var(--vscode-panel-border, #ddd);
       flex-shrink: 0;
+    }
+    .top-action-bar--embedded {
+      padding: 0 0 10px;
+      border: none;
     }
 
     /* --- Markdown preview --- */
@@ -662,7 +701,7 @@ export class DetailPanel extends LitElement {
 
   updated(changed: Map<string, unknown>) {
     if (changed.has('open') && this.open) {
-      this._width = Math.max(480, window.innerWidth * 0.6);
+      this._width = Math.max(480, window.innerWidth * 0.7);
     }
     if (changed.has('repo') && this.repo && !this.navigateToFile) {
       this._mode = 'detail';
@@ -682,16 +721,16 @@ export class DetailPanel extends LitElement {
       <div class="${panelClasses}" style="width:${this._width}px">
         <div class="resize-handle" @mousedown="${this._onResizeStart}"></div>
         ${hasFileNoRepo
-          ? (this._isSplitView ? this._renderStandalonePreviewSplit() : this._renderStandalonePreview())
-          : this._isSplitView
-            ? this._renderSplitView()
-            : this._mode === 'file-detail' ? this._renderFileDetail() : this._renderDetail()}
+        ? (this._isSplitView ? this._renderStandalonePreviewSplit() : this._renderStandalonePreview())
+        : this._isSplitView
+          ? this._renderSplitView()
+          : this._mode === 'file-detail' ? this._renderFileDetail() : this._renderDetail()}
       </div>
     `;
   }
 
   private _renderDetail() {
-    if (!this.repo) {return nothing;}
+    if (!this.repo) { return nothing; }
     return html`
       <div class="panel-header">
         <div class="header-info">
@@ -711,31 +750,13 @@ export class DetailPanel extends LitElement {
             </div>
           </div>
         `)}
-        ${this.fileGroups.length === 0 && this.claudeMdFiles.length === 0
-          ? html`<div class="empty-state">No files found in .claude/</div>`
-          : this.fileGroups.map(group => {
-            const groupKey = group.label.toLowerCase().replace(/\s+/g, '-');
-            return html`
-              <div class="file-group">
-                <div class="group-label">${group.label} (${group.entries.length})</div>
-                ${group.entries.map(entry => html`
-                  <div class="file-item">
-                    <div class="file-row" data-group="${groupKey}" @click="${() => this._navigateToFile(entry)}" @contextmenu="${(e: MouseEvent) => this._onFileContextMenu(e, entry)}">
-                      <span class="file-name">${entry.name}</span>
-                      ${this._isSymlink(entry) ? iconLink('symlink-icon') : ''}
-                    </div>
-                  </div>
-                `)}
-              </div>
-            `;
-          })
-        }
+        ${this._renderFileGroupList()}
       </div>
     `;
   }
 
   private _renderFileDetail() {
-    if (!this._viewingFile || !this.repo) {return nothing;}
+    if (!this._viewingFile || !this.repo) { return nothing; }
     return html`
       <div class="panel-header">
         <div class="header-left">
@@ -755,34 +776,79 @@ export class DetailPanel extends LitElement {
           `)}
         </div>
       ` : ''}
-      <div class="top-action-bar">
-        <button class="action-btn primary" @click="${() => this._openAsset(this._viewingFile!.path)}">
-          Open in Editor
-        </button>
-        <button class="action-btn icon-btn" @click="${() => this._copyPath(this._viewingFile!.path)}" title="Copy Path">
-          ${iconCopy()}
-        </button>
-        <button class="action-btn icon-btn danger-icon" @click="${this._deleteViewingFile}" title="Delete">
-          ${iconTrash()}
-        </button>
-      </div>
+      ${this._renderFileActionBar()}
       <div class="panel-body file-detail-body">
         ${this._viewingFile.preview
-          ? this._renderFileContent(this._viewingFile.path, this._viewingFile.preview)
-          : html`<div class="empty-state">Loading...</div>`
-        }
+        ? this._renderFileContent(this._viewingFile.path, this._viewingFile.preview)
+        : html`<div class="empty-state">Loading...</div>`
+      }
       </div>
     `;
   }
 
-  private _forgetRepo() {
-    if (this.repo) {
-      this.dispatchEvent(new CustomEvent('forget-repo', {
-        detail: { repoName: this.repo.name },
-        bubbles: true,
-        composed: true,
-      }));
-    }
+  /** Full action bar for a viewed file — shared by file-detail, standalone, and split-view panes */
+  private _renderFileActionBar({ showDelete = true, embedded = false }: { showDelete?: boolean; embedded?: boolean } = {}) {
+    if (!this._viewingFile) return nothing;
+    return html`
+      <div class="top-action-bar ${embedded ? 'top-action-bar--embedded' : ''}">
+        ${this._renderAssetActions()}
+        <button class="action-btn icon-btn" @click="${() => this._copyPath(this._viewingFile!.path)}" title="Copy Path">
+          ${iconCopy()}
+        </button>
+        <button class="action-btn icon-btn" @click="${() => this._openAsset(this._viewingFile!.path)}" title="Open in Editor">
+          ${iconExternal()}
+        </button>
+        ${showDelete ? html`
+          <button class="action-btn icon-btn danger-icon" @click="${this._deleteViewingFile}" title="Delete">
+            ${iconTrash()}
+          </button>
+        ` : nothing}
+      </div>
+    `;
+  }
+
+  /** Copy/Install / Update / Export actions shared by all file preview action bars */
+  private _renderAssetActions() {
+    if (!this.viewingAsset || isContextFile(this.viewingAsset)) return nothing;
+    const useInstall = this.viewingAsset.isCanonical || this.viewingAsset.isSymlink;
+    return html`
+      <button class="action-btn install-btn" @click="${this._installViewingAsset}"
+          title="${useInstall ? 'Install this asset into other repos' : 'Copy this asset to other repos'}">
+        ${useInstall ? iconInstall() : iconCopy()} ${useInstall ? 'Install to Repo' : 'Copy to Repo'}
+      </button>
+      ${this.updateAvailable ? html`
+        <button class="action-btn update-btn" @click="${this._updateViewingAsset}" title="Newer version available on GitHub">
+          ${iconUpdate()} Update
+        </button>
+      ` : nothing}
+    `;
+  }
+
+  private _installViewingAsset() {
+    if (!this.viewingAsset) return;
+    this.dispatchEvent(new CustomEvent('install-asset', {
+      detail: this.viewingAsset,
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _updateViewingAsset() {
+    if (!this.viewingAsset) return;
+    this.dispatchEvent(new CustomEvent('update-asset', {
+      detail: this.viewingAsset,
+      bubbles: true,
+      composed: true,
+    }));
+  }
+
+  private _exportViewingAsset() {
+    if (!this.viewingAsset) return;
+    this.dispatchEvent(new CustomEvent('export-asset', {
+      detail: this.viewingAsset,
+      bubbles: true,
+      composed: true,
+    }));
   }
 
   private _onFileContextMenu(e: MouseEvent, entry: FileEntry) {
@@ -807,8 +873,8 @@ export class DetailPanel extends LitElement {
       const asset = this.repo.assets.find(a =>
         a.name === this._viewingFile!.name || a.path === viewPath || viewPath.startsWith(a.path + '/'),
       );
-      const fallbackPath = viewPath.endsWith('/SKILL.md') ? viewPath.slice(0, -'/SKILL.md'.length) : viewPath;
-      const detail = asset ?? { name: this._viewingFile.name, type: 'skill' as const, path: fallbackPath, isDirectory: viewPath.endsWith('/SKILL.md'), hash: '', repoName: this.repo.name };
+      const fallbackPath = stripSkillMd(viewPath);
+      const detail = asset ?? { name: this._viewingFile.name, type: 'skill' as const, path: fallbackPath, isDirectory: viewPath.endsWith(`/${SKILL_MD}`), hash: '', repoName: this.repo.name };
       this.dispatchEvent(new CustomEvent('delete-file', {
         detail: { path: detail.path, repoName: this.repo.name },
         bubbles: true,
@@ -816,7 +882,7 @@ export class DetailPanel extends LitElement {
       }));
     } else {
       // Standalone preview (no repo selected) — strip /SKILL.md to get directory path
-      const assetPath = viewPath.endsWith('/SKILL.md') ? viewPath.slice(0, -'/SKILL.md'.length) : viewPath;
+      const assetPath = stripSkillMd(viewPath);
       this.dispatchEvent(new CustomEvent('delete-file', {
         detail: { path: assetPath, repoName: '' },
         bubbles: true,
@@ -852,19 +918,12 @@ export class DetailPanel extends LitElement {
           `)}
         </div>
       ` : ''}
-      <div class="top-action-bar">
-        <button class="action-btn primary" @click="${() => this._openAsset(this._viewingFile!.path)}">
-          Open in Editor
-        </button>
-        <button class="action-btn icon-btn" @click="${() => this._copyPath(this._viewingFile!.path)}" title="Copy Path">
-          ${iconCopy()}
-        </button>
-      </div>
+      ${this._renderFileActionBar({ showDelete: false })}
       <div class="panel-body file-detail-body">
         ${this._viewingFile.preview
-          ? this._renderFileContent(this._viewingFile.path, this._viewingFile.preview)
-          : html`<div class="empty-state">Loading...</div>`
-        }
+        ? this._renderFileContent(this._viewingFile.path, this._viewingFile.preview)
+        : html`<div class="empty-state">Loading...</div>`
+      }
       </div>
     `;
   }
@@ -921,14 +980,36 @@ export class DetailPanel extends LitElement {
         </div>
         <div class="split-right">
           ${this._viewingFile
-            ? this._renderFilePreviewContent()
-            : html`<div class="empty-state">Select a file to preview</div>`}
+        ? this._renderFilePreviewContent()
+        : html`<div class="empty-state">Select a file to preview</div>`}
         </div>
       </div>
     `;
   }
 
   /** File list content — reused by both single-column detail and split-view left pane */
+  private _renderFileGroupList() {
+    if (this.fileGroups.length === 0 && this.claudeMdFiles.length === 0) {
+      return html`<div class="empty-state">No files found in .claude/</div>`;
+    }
+    return this.fileGroups.map(group => {
+      const groupKey = group.label.toLowerCase().replace(/\s+/g, '-');
+      return html`
+        <div class="file-group">
+          <div class="group-label">${group.label} (${group.entries.length})</div>
+          ${group.entries.map(entry => html`
+            <div class="file-item">
+              <div class="file-row ${this._viewingFile?.name === entry.name ? 'active' : ''}" data-group="${groupKey}" @click="${() => this._navigateToFile(entry)}" @contextmenu="${(e: MouseEvent) => this._onFileContextMenu(e, entry)}">
+                <span class="file-name">${entry.name}</span>
+                ${this._isDiverged(entry) ? iconWarning('warn-icon') : this._isSymlink(entry) ? iconLink('symlink-icon') : ''}
+              </div>
+            </div>
+          `)}
+        </div>
+      `;
+    });
+  }
+
   private _renderFileListContent() {
     return html`
       ${this.claudeMdFiles.map(entry => html`
@@ -938,25 +1019,7 @@ export class DetailPanel extends LitElement {
           </div>
         </div>
       `)}
-      ${this.fileGroups.length === 0 && this.claudeMdFiles.length === 0
-        ? html`<div class="empty-state">No files found in .claude/</div>`
-        : this.fileGroups.map(group => {
-          const groupKey = group.label.toLowerCase().replace(/\s+/g, '-');
-          return html`
-            <div class="file-group">
-              <div class="group-label">${group.label} (${group.entries.length})</div>
-              ${group.entries.map(entry => html`
-                <div class="file-item">
-                  <div class="file-row ${this._viewingFile?.name === entry.name ? 'active' : ''}" data-group="${groupKey}" @click="${() => this._navigateToFile(entry)}" @contextmenu="${(e: MouseEvent) => this._onFileContextMenu(e, entry)}">
-                    <span class="file-name">${entry.name}</span>
-                    ${this._isSymlink(entry) ? iconLink('symlink-icon') : ''}
-                  </div>
-                </div>
-              `)}
-            </div>
-          `;
-        })
-      }
+      ${this._renderFileGroupList()}
     `;
   }
 
@@ -972,21 +1035,11 @@ export class DetailPanel extends LitElement {
           `)}
         </div>
       ` : ''}
-      <div class="top-action-bar" style="padding:0 0 10px;border:none">
-        <button class="action-btn primary" @click="${() => this._openAsset(this._viewingFile!.path)}">
-          Open in Editor
-        </button>
-        <button class="action-btn icon-btn" @click="${() => this._copyPath(this._viewingFile!.path)}" title="Copy Path">
-          ${iconCopy()}
-        </button>
-        <button class="action-btn icon-btn danger-icon" @click="${this._deleteViewingFile}" title="Delete">
-          ${iconTrash()}
-        </button>
-      </div>
+      ${this._renderFileActionBar({ embedded: true })}
       <div class="file-detail-body">
         ${this._viewingFile.preview
-          ? this._renderFileContent(this._viewingFile.path, this._viewingFile.preview)
-          : html`<div class="empty-state">Loading...</div>`}
+        ? this._renderFileContent(this._viewingFile.path, this._viewingFile.preview)
+        : html`<div class="empty-state">Loading...</div>`}
       </div>
     `;
   }
@@ -1099,6 +1152,14 @@ export class DetailPanel extends LitElement {
     return this.repo.assets.some(a => a.isSymlink && (a.path === entry.path || entry.path.startsWith(a.path + '/')));
   }
 
+  /** Check if a file entry corresponds to a diverged asset */
+  private _isDiverged(entry: FileEntry): boolean {
+    if (!this.repo) return false;
+    return this.repo.assets.some(a =>
+      this.divergedPaths.has(a.path) && (a.path === entry.path || entry.path.startsWith(a.path + '/')),
+    );
+  }
+
   // --- Navigation ---
 
   private _navigateToFile(entry: FileEntry) {
@@ -1124,19 +1185,8 @@ export class DetailPanel extends LitElement {
   }
 
   private async _copyPath(filePath: string) {
-    // Strip /SKILL.md suffix — copy the directory path, not the internal file
-    const copyValue = filePath.endsWith('/SKILL.md') ? filePath.slice(0, -'/SKILL.md'.length) : filePath;
-    try {
-      await navigator.clipboard.writeText(copyValue);
-    } catch {
-      // Fallback: select from a temp input
-      const input = document.createElement('input');
-      input.value = copyValue;
-      document.body.appendChild(input);
-      input.select();
-      document.execCommand('copy');
-      document.body.removeChild(input);
-    }
+    const copyValue = stripSkillMd(filePath);
+    await navigator.clipboard.writeText(copyValue).catch(() => undefined);
   }
 
   private _openAsset(path: string) {

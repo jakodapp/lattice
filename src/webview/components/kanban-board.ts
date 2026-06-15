@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { SerializedAsset, SerializedRepo, ViewMode, AssetType, ASSET_TYPE_LABELS, HIDDEN_ASSET_TYPES, ASSET_TYPE_ORDER } from '../types';
+import { SerializedAsset, SerializedRepo, ViewMode, AssetType, ASSET_TYPE_LABELS, HIDDEN_ASSET_TYPES, ASSET_TYPE_ORDER, mergeGlobalAssets, GLOBAL_MERGED_NAME, DEFAULT_TOOL, isAssetActiveForAgent } from '../types';
 import { iconWarning } from '../icons';
 import './kanban-column';
 
@@ -10,26 +10,11 @@ export class KanbanBoard extends LitElement {
   @property({ type: String }) view: ViewMode = 'repo';
   @property({ type: String }) searchQuery = '';
   @property({ type: String }) selectedRepoName = '';
+  @property({ type: String }) selectedAgent = DEFAULT_TOOL;
+  @property({ type: Object }) updatePaths: Set<string> = new Set();
   @state() private _typeFilter: AssetType | '' = '';
 
-  /** Compute set of asset keys (type::name) that have diverged hashes across repos */
-  private get _divergedKeys(): Set<string> {
-    const groups = new Map<string, Set<string>>();
-    for (const repo of this.repos) {
-      if (repo.isCanonical) continue;
-      for (const a of repo.assets) {
-        const key = `${a.type}::${a.name}`;
-        const hashes = groups.get(key) ?? new Set<string>();
-        hashes.add(a.hash);
-        groups.set(key, hashes);
-      }
-    }
-    const diverged = new Set<string>();
-    for (const [key, hashes] of groups) {
-      if (hashes.size > 1) diverged.add(key);
-    }
-    return diverged;
-  }
+  @property({ type: Object }) divergedPaths: Set<string> = new Set();
 
   private _lastEmittedCount = -1;
 
@@ -51,13 +36,13 @@ export class KanbanBoard extends LitElement {
       return filtered.length;
     }
 
-    // Repo view: sum of filtered assets across filtered repos
-    const filteredRepos = this._filterRepos();
-    let count = 0;
-    for (const repo of filteredRepos) {
-      count += this._filterAssets(repo.assets).length;
-    }
-    return count;
+    // Repo view: merged GLOBAL chips + filtered assets across project repos
+    const filteredRepos = this._filterRepos().filter(r => !r.isCanonical);
+    const globals = filteredRepos.filter(r => r.isGlobal);
+    const globalCount = globals.length > 0 ? this._filterAssets(mergeGlobalAssets(globals)).length : 0;
+    return filteredRepos
+      .filter(r => !r.isGlobal)
+      .reduce((sum, repo) => sum + this._filterAssets(repo.assets).length, globalCount);
   }
 
   static styles = css`
@@ -167,6 +152,7 @@ export class KanbanBoard extends LitElement {
     .card-stats { font-size: 11px; color: var(--vscode-descriptionForeground, #888); margin-bottom: 8px; display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
     .card-stat { display: flex; align-items: center; gap: 3px; }
     .asset-card.available-only { opacity: 0.75; border-style: dashed; }
+    .asset-card.inactive-agent { opacity: 0.45; filter: grayscale(0.7); }
     .card-tag.available { background: rgba(59,130,246,0.12); color: #3B82F6; font-weight: 400; text-transform: none; }
     .repo-pill { font-size: 10px; padding: 2px 7px; border-radius: 3px; background: rgba(128,128,128,0.1); color: var(--vscode-descriptionForeground, #888); }
     .repo-more { font-size: 10px; color: var(--vscode-descriptionForeground, #666); opacity: 0.7; }
@@ -202,22 +188,43 @@ export class KanbanBoard extends LitElement {
 
   private _renderByRepo() {
     const filteredRepos = this._filterRepos().filter(r => !r.isCanonical);
+    const globals = filteredRepos.filter(r => r.isGlobal);
+    const projects = filteredRepos.filter(r => !r.isGlobal);
     return html`
       <div class="add-repo-link">
         <a @click="${this._onAddRepo}">Can't find your repository?</a>
       </div>
-      ${filteredRepos.map(repo => html`
+      ${globals.length > 0 ? this._renderGlobalColumn(globals) : ''}
+      ${projects.map(repo => html`
         <kanban-column
           .columnTitle="${repo.name}"
           .assets="${this._filterAssets(repo.assets)}"
           .repoName="${repo.name}"
           .selected="${repo.name === this.selectedRepoName}"
-          .isGlobal="${repo.isGlobal ?? false}"
           .isCanonical="${repo.isCanonical ?? false}"
-          .divergedKeys="${this._divergedKeys}"
+          .divergedPaths="${this.divergedPaths}"
+          .updatePaths="${this.updatePaths}"
+          .selectedAgent="${this.selectedAgent}"
           @asset-drop-at="${this._onAssetDropAt}"
         ></kanban-column>
       `)}
+    `;
+  }
+
+  /** All global dirs (~/.claude, ~/.cursor, …) merge into one deduplicated column */
+  private _renderGlobalColumn(globals: SerializedRepo[]) {
+    return html`
+      <kanban-column
+        .columnTitle="${GLOBAL_MERGED_NAME}"
+        .assets="${this._filterAssets(mergeGlobalAssets(globals))}"
+        .repoName="${GLOBAL_MERGED_NAME}"
+        .selected="${this.selectedRepoName === GLOBAL_MERGED_NAME}"
+        .isGlobal="${true}"
+        .divergedPaths="${this.divergedPaths}"
+        .updatePaths="${this.updatePaths}"
+        .selectedAgent="${this.selectedAgent}"
+        @asset-drop-at="${this._onAssetDropAt}"
+      ></kanban-column>
     `;
   }
 
@@ -255,8 +262,9 @@ export class KanbanBoard extends LitElement {
             const repoInstances = g.instances.filter(i => !i.isCanonical);
             const isAvailableOnly = repoInstances.length === 0;
             const isDiverged = new Set(repoInstances.map(i => i.hash)).size > 1;
+            const isInactive = !isAvailableOnly && !repoInstances.some(i => isAssetActiveForAgent(i, this.selectedAgent));
             return html`
-              <div class="asset-card ${isAvailableOnly ? 'available-only' : ''}" data-type="${g.type}" @click="${() => this._onCardClick(g.instances[0])}" @contextmenu="${(e: MouseEvent) => this._onCardContextMenu(e, g.instances[0])}">
+              <div class="asset-card ${isAvailableOnly ? 'available-only' : ''} ${isInactive ? 'inactive-agent' : ''}" data-type="${g.type}" @click="${() => this._onCardClick(g.instances[0])}" @contextmenu="${(e: MouseEvent) => this._onCardContextMenu(e, g.instances[0])}">
                 <div class="card-header-row">
                   <div class="card-title">${g.name}</div>
                   <span class="card-tag" data-type="${g.type}">${ASSET_TYPE_LABELS[g.type]}</span>
@@ -356,7 +364,7 @@ export class KanbanBoard extends LitElement {
   /** Called when an asset is dropped on a column — executes immediately without context menu */
   private _onAssetDropAt(e: CustomEvent<{ asset: SerializedAsset; targetRepoName: string; x: number; y: number }>) {
     const { asset, targetRepoName } = e.detail;
-    if (asset.repoName === targetRepoName) { return; }
+    if (asset.repoName === targetRepoName || targetRepoName === GLOBAL_MERGED_NAME) { return; }
 
     this.dispatchEvent(new CustomEvent('asset-drop', {
       detail: { asset, targetRepoName, action: 'copy' },

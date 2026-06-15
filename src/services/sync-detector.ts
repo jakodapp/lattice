@@ -1,4 +1,5 @@
 import { Asset, AssetGroup, AssetType, SyncStatus } from '../types';
+import { UNREADABLE_HASH, findMajorityHash } from '../constants';
 
 /**
  * Groups assets by (type, name) across all repos and determines sync status.
@@ -26,8 +27,11 @@ export function buildAssetGroups(allAssets: Asset[]): AssetGroup[] {
     if (group.instances.length <= 1) {
       group.syncStatus = 'synced';
     } else {
-      const hashes = new Set(group.instances.map(i => i.hash));
-      group.syncStatus = hashes.size === 1 ? 'synced' : 'diverged';
+      const readableHashes = new Set(
+        group.instances.map(i => i.hash).filter(h => h !== UNREADABLE_HASH),
+      );
+      // All unreadable → diverged; one unique readable hash → synced; otherwise diverged
+      group.syncStatus = readableHashes.size === 1 ? 'synced' : 'diverged';
     }
   }
 
@@ -53,28 +57,14 @@ export function groupByType(groups: AssetGroup[]): Map<AssetType, AssetGroup[]> 
 /**
  * Determine the sync status of a single asset instance within its group.
  * - If there's only 1 instance, it's 'unique'
- * - If its hash matches the majority hash, it's 'synced'
- * - Otherwise it's 'modified'
+ * - If its hash matches the majority hash (strictly highest count, no ties), it's 'synced'
+ * - Unreadable assets are always 'modified'
+ * - If there's a tie for the highest count, all instances are 'modified'
  */
 export function getInstanceStatus(asset: Asset, group: AssetGroup): SyncStatus {
-  if (group.instances.length <= 1) {
-    return 'unique';
-  }
+  if (group.instances.length <= 1) return 'unique';
+  if (asset.hash === UNREADABLE_HASH) return 'modified';
 
-  // Find the majority hash
-  const hashCounts = new Map<string, number>();
-  for (const instance of group.instances) {
-    hashCounts.set(instance.hash, (hashCounts.get(instance.hash) ?? 0) + 1);
-  }
-
-  let majorityHash = '';
-  let maxCount = 0;
-  for (const [hash, count] of hashCounts) {
-    if (count > maxCount) {
-      majorityHash = hash;
-      maxCount = count;
-    }
-  }
-
-  return asset.hash === majorityHash ? 'synced' : 'modified';
+  const majority = findMajorityHash(group.instances.map(i => i.hash));
+  return majority && asset.hash === majority ? 'synced' : 'modified';
 }

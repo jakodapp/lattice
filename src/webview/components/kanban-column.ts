@@ -1,6 +1,6 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property, state } from 'lit/decorators.js';
-import { SerializedAsset } from '../types';
+import { SerializedAsset, GLOBAL_MERGED_NAME, DEFAULT_TOOL, isAssetActiveForAgent } from '../types';
 import { iconChevron } from '../icons';
 import './asset-chip';
 
@@ -12,7 +12,9 @@ export class KanbanColumn extends LitElement {
   @property({ type: Boolean }) selected = false;
   @property({ type: Boolean }) isGlobal = false;
   @property({ type: Boolean }) isCanonical = false;
-  @property({ type: Object }) divergedKeys: Set<string> = new Set();
+  @property({ type: Object }) divergedPaths: Set<string> = new Set();
+  @property({ type: Object }) updatePaths: Set<string> = new Set();
+  @property({ type: String }) selectedAgent = DEFAULT_TOOL;
   @state() private _dragOver = false;
 
   static styles = css`
@@ -112,7 +114,7 @@ export class KanbanColumn extends LitElement {
     return html`
       <div class="column ${this._dragOver ? 'drag-over' : ''} ${this.selected ? 'selected' : ''} ${this.isGlobal ? 'global' : ''}" @contextmenu="${this._onHeaderContextMenu}">
         <div class="header" @click="${this._onHeaderClick}">
-          <span class="header-title" title="${this.columnTitle}">${this.columnTitle}${this.isGlobal ? html`<span class="global-badge">GLOBAL</span>` : ''}${this.isCanonical ? html`<span class="global-badge">CANONICAL</span>` : ''}</span>
+          <span class="header-title" title="${this.columnTitle}">${this.columnTitle}${this.isGlobal && this.columnTitle !== GLOBAL_MERGED_NAME ? html`<span class="global-badge">GLOBAL</span>` : ''}${this.isCanonical ? html`<span class="global-badge">CANONICAL</span>` : ''}</span>
           ${iconChevron('header-chevron')}
         </div>
         <div
@@ -125,7 +127,7 @@ export class KanbanColumn extends LitElement {
             ${this.assets.length === 0
               ? html`<div class="empty-hint">No assets yet</div>`
               : this.assets.map(asset => html`
-                <asset-chip .asset="${asset}" .diverged="${this.divergedKeys.has(`${asset.type}::${asset.name}`)}"></asset-chip>
+                <asset-chip .asset="${asset}" .diverged="${this.divergedPaths.has(asset.path)}" .hasUpdate="${this.updatePaths.has(asset.path)}" .tools="${asset.mergedTools ?? []}" .copies="${asset.mergedCount ?? 1}" .disabled="${!this.isCanonical && !isAssetActiveForAgent(asset, this.selectedAgent)}"></asset-chip>
               `)}
           </div>
         </div>
@@ -150,7 +152,13 @@ export class KanbanColumn extends LitElement {
     }));
   }
 
+  /** The merged GLOBAL column has no single target dir — cross-tool installs go through Export */
+  private get _dropDisabled(): boolean {
+    return this.repoName === GLOBAL_MERGED_NAME;
+  }
+
   private _onDragOver(e: DragEvent) {
+    if (this._dropDisabled) { return; }
     e.preventDefault();
     e.dataTransfer!.dropEffect = 'copy';
     this._dragOver = true;
@@ -161,6 +169,7 @@ export class KanbanColumn extends LitElement {
   }
 
   private _onDrop(e: DragEvent) {
+    if (this._dropDisabled) { return; }
     e.preventDefault();
     this._dragOver = false;
 

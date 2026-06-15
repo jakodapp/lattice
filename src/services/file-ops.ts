@@ -3,18 +3,22 @@ import * as path from 'path';
 import { Asset, Repo } from '../types';
 import { getErrorMessage } from '../constants';
 import { CcmError } from '../errors';
-import { getTargetPath } from './path-resolver';
+import { getWriteTarget } from './path-resolver';
+import type { AgentDef } from './agent-defs';
 import type { OperationResult } from './result';
 
-/** Copy an asset to a target repo */
-export async function copyAsset(asset: Asset, targetRepo: Repo): Promise<string> {
-  const targetPath = getTargetPath(asset, targetRepo);
+/** Copy an asset to a target repo, converting format when the agent requires it */
+export async function copyAsset(asset: Asset, targetRepo: Repo, agent?: AgentDef): Promise<string> {
+  const { targetPath, rule } = getWriteTarget(asset, targetRepo, agent);
 
   try {
     await fs.mkdir(path.dirname(targetPath), { recursive: true });
 
     if (asset.isDirectory) {
       await fs.cp(asset.path, targetPath, { recursive: true });
+    } else if (rule?.method === 'convert' && rule.convert) {
+      const content = await fs.readFile(asset.path, 'utf-8');
+      await fs.writeFile(targetPath, rule.convert(content, asset.name, asset.path));
     } else {
       await fs.copyFile(asset.path, targetPath);
     }
@@ -30,8 +34,8 @@ export async function copyAsset(asset: Asset, targetRepo: Repo): Promise<string>
 }
 
 /** Move an asset to a target repo (copy + delete source) */
-export async function moveAsset(asset: Asset, targetRepo: Repo): Promise<string> {
-  const targetPath = await copyAsset(asset, targetRepo);
+export async function moveAsset(asset: Asset, targetRepo: Repo, agent?: AgentDef): Promise<string> {
+  const targetPath = await copyAsset(asset, targetRepo, agent);
   await deleteAsset(asset);
   return targetPath;
 }

@@ -1,8 +1,8 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
-import { isContextFile } from '../types';
+import { isContextFile, UNREADABLE_HASH } from '../types';
 import type { SerializedAsset } from '../types';
-import { iconDownload, iconCopy, iconDiff, iconConvertLink, iconTrash } from '../icons';
+import { iconDownload, iconCopy, iconDiff, iconConvertLink, iconTrash, iconExport } from '../icons';
 
 @customElement('context-menu')
 export class ContextMenu extends LitElement {
@@ -98,6 +98,20 @@ export class ContextMenu extends LitElement {
     const isCanonical = this.asset.isCanonical;
     const isAssetsView = this.viewContext === 'type';
     const isRepoView = !isAssetsView;
+    const unreadable = this.asset.hash === UNREADABLE_HASH;
+
+    // Unreadable assets can only be removed
+    if (unreadable) {
+      return html`
+        <div class="overlay" @click="${this._dismiss}" @contextmenu="${this._dismissCtx}"></div>
+        <div class="menu visible" style="left:${clampedX}px;top:${clampedY}px">
+          <button class="menu-item danger" @click="${this._delete}">
+            ${iconTrash()}
+            Remove from repo
+          </button>
+        </div>
+      `;
+    }
 
     const contextFile = isContextFile(this.asset);
     const useInstall = isSymlink || isCanonical;
@@ -130,6 +144,12 @@ export class ContextMenu extends LitElement {
           <button class="menu-item" @click="${this._convertToSymlink}">
             ${iconConvertLink()}
             Convert to symlink
+          </button>
+        ` : ''}
+        ${!contextFile ? html`
+          <button class="menu-item" @click="${this._exportToAgents}">
+            ${iconExport()}
+            Export to agent...
           </button>
         ` : ''}
         ${!contextFile || this.instanceCount >= 2 || (!this.asset.isSymlink && !isCanonical) ? html`
@@ -181,6 +201,11 @@ export class ContextMenu extends LitElement {
 
   private _convertToSymlink() {
     this.dispatchEvent(new CustomEvent('ctx-convert-symlink', { detail: this.asset, bubbles: true, composed: true }));
+    this._dismiss();
+  }
+
+  private _exportToAgents() {
+    this.dispatchEvent(new CustomEvent('ctx-export-agents', { detail: this.asset, bubbles: true, composed: true }));
     this._dismiss();
   }
 

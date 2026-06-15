@@ -2,16 +2,16 @@
   "name": "lattice-context-manager",
   "displayName": "Lattice Context Manager",
   "description": "Visual dashboard to manage AI agent configurations (.claude/, .cursor/, .github/) across multiple repositories with sync detection, symlink sharing, and drag-and-drop operations",
-  "version": "0.1.2",
+  "version": "0.1.4",
   "publisher": "Jakoda",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/jak0da/lattice"
+    "url": "https://github.com/jakodapp/lattice"
   },
-  "homepage": "https://github.com/jak0da/lattice",
+  "homepage": "https://github.com/jakodapp/lattice",
   "bugs": {
-    "url": "https://github.com/jak0da/lattice/issues"
+    "url": "https://github.com/jakodapp/lattice/issues"
   },
   "icon": "resources/logo.png",
   "keywords": [
@@ -190,7 +190,9 @@
           "default": [
             "~/.claude",
             "~/.cursor",
-            "~/.github"
+            "~/.github",
+            "~/.codex",
+            "~/.gemini"
           ],
           "description": "Global agent config directories to include in the dashboard (remove entries to disable)"
         },

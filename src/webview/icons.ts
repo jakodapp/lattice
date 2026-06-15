@@ -17,6 +17,11 @@ import {
   FolderOpen,
   EyeOff,
   Eye,
+  CircleArrowUp,
+  PackagePlus,
+  Share2,
+  ChevronsUpDown,
+  Bot,
 } from 'lucide-static';
 
 function lucide(svgString: string, className?: string): TemplateResult {
@@ -43,3 +48,8 @@ export const iconReplace = (cls?: string) => lucide(Replace, cls);
 export const iconFolderOpen = (cls?: string) => lucide(FolderOpen, cls);
 export const iconEyeOff = (cls?: string) => lucide(EyeOff, cls);
 export const iconEye = (cls?: string) => lucide(Eye, cls);
+export const iconUpdate = (cls?: string) => lucide(CircleArrowUp, cls);
+export const iconInstall = (cls?: string) => lucide(PackagePlus, cls);
+export const iconExport = (cls?: string) => lucide(Share2, cls);
+export const iconSelector = (cls?: string) => lucide(ChevronsUpDown, cls);
+export const iconAgent = (cls?: string) => lucide(Bot, cls);
