@@ -15,12 +15,14 @@ const TYPE_ICONS: Record<AssetType, vscode.ThemeIcon> = {
   'command': new vscode.ThemeIcon('terminal'),
   'agent': new vscode.ThemeIcon('robot'),
   'rule': new vscode.ThemeIcon('law'),
+  'workflow': new vscode.ThemeIcon('checklist'),
   'script': new vscode.ThemeIcon('file-code'),
   'hook': new vscode.ThemeIcon('zap'),
   'mcp-config': new vscode.ThemeIcon('server'),
   'output-style': new vscode.ThemeIcon('paintcan'),
   'settings': new vscode.ThemeIcon('gear'),
   'claude-md': new vscode.ThemeIcon('markdown'),
+  'instructions': new vscode.ThemeIcon('book'),
 };
 
 /** Top-level node for an asset type category (e.g. "Skills", "Commands") */

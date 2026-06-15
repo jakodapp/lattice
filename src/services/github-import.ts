@@ -4,6 +4,7 @@ import { Asset, AssetType, ASSET_TYPE_DIRS, Repo } from '../types';
 import { hashFile, hashDirectory } from './hasher';
 import { installAsset } from './symlink-ops';
 import { copyAsset } from './file-ops';
+import type { AgentDef } from './agent-defs';
 import { enumerateAssetDir } from './asset-enumerator';
 import { SKILL_MD } from '../constants';
 
@@ -112,7 +113,7 @@ async function readPreview(filePath: string): Promise<string> {
 export async function installDiscoveredAssets(
   assets: DiscoveredAsset[],
   targetRepos: Repo[],
-  options: { canonicalBase: string | string[] },
+  options: { canonicalBase: string | string[]; agent?: AgentDef },
 ): Promise<number> {
   let successCount = 0;
 
@@ -130,7 +131,7 @@ export async function installDiscoveredAssets(
 
     for (const repo of targetRepos) {
       try {
-        await installAsset(tempAsset, repo, { canonicalBase: options.canonicalBase, copyFn: copyAsset });
+        await installAsset(tempAsset, repo, { canonicalBase: options.canonicalBase, copyFn: copyAsset, agent: options.agent });
         successCount++;
       } catch { /* continue with next */ }
     }

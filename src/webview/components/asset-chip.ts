@@ -1,12 +1,17 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, property } from 'lit/decorators.js';
 import { AssetType, SerializedAsset } from '../types';
-import { iconWarning, iconLink, iconTrash } from '../icons';
+import { iconWarning, iconLink, iconTrash, iconUpdate } from '../icons';
 
 @customElement('asset-chip')
 export class AssetChip extends LitElement {
   @property({ type: Object }) asset!: SerializedAsset;
   @property({ type: Boolean }) diverged = false;
+  @property({ type: Boolean }) hasUpdate = false;
+  @property({ type: Array }) tools: string[] = [];
+  @property({ type: Number }) copies = 1;
+  /** Asset is not usable by the selected agent — greyed out, not draggable */
+  @property({ type: Boolean }) disabled = false;
 
   static styles = css`
     :host {
@@ -41,6 +46,17 @@ export class AssetChip extends LitElement {
       opacity: 0.4;
     }
 
+    .chip.disabled {
+      opacity: 0.45;
+      filter: grayscale(0.7);
+      cursor: default;
+    }
+
+    .chip.disabled:hover {
+      transform: none;
+      box-shadow: none;
+    }
+
     .chip[data-type="skill"]   { background: var(--color-skill-bg);   border-color: var(--color-skill-border);   color: var(--color-skill); }
     .chip[data-type="command"] { background: var(--color-command-bg); border-color: var(--color-command-border); color: var(--color-command); }
     .chip[data-type="agent"]   { background: var(--color-agent-bg);   border-color: var(--color-agent-border);   color: var(--color-agent); }
@@ -48,6 +64,8 @@ export class AssetChip extends LitElement {
     .chip[data-type="script"]  { background: var(--color-script-bg);  border-color: var(--color-script-border);  color: var(--color-script); }
     .chip[data-type="hook"]    { background: rgba(20,184,166,0.12); border-color: rgba(20,184,166,0.35); color: #14B8A6; }
     .chip[data-type="output-style"] { background: rgba(221,51,250,0.12); border-color: rgba(221,51,250,0.35); color: #DD33FA; }
+    .chip[data-type="workflow"] { background: rgba(99,102,241,0.12); border-color: rgba(99,102,241,0.35); color: #6366F1; }
+    .chip[data-type="instructions"] { background: rgba(232,123,53,0.12); border-color: rgba(232,123,53,0.35); color: #E87B35; }
     .chip[data-type="settings"] { background: hsl(0,0%,92%); border-color: hsl(0,0%,75%); color: hsl(0,0%,35%); }
     .chip[data-type="claude-md"] { background: hsl(45,70%,92%); border-color: hsl(45,55%,75%); color: hsl(45,55%,25%); }
     .chip[data-type="mcp-config"] { background: hsl(340,50%,92%); border-color: hsl(340,40%,75%); color: hsl(340,40%,30%); }
@@ -106,25 +124,52 @@ export class AssetChip extends LitElement {
     .chip:hover .warn-icon { opacity: 0; }
     .chip:hover .warn-icon + .trash-icon,
     .chip:hover .warn-icon + .local-trash { opacity: 0.5; }
+
+    .update-icon {
+      width: 12px; height: 12px; flex-shrink: 0;
+      color: #22c55e; opacity: 0.9;
+    }
+
+    .tool-badge {
+      font-size: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.4px;
+      padding: 1px 4px;
+      border-radius: 3px;
+      background: rgba(127,127,127,0.18);
+      opacity: 0.85;
+      flex-shrink: 0;
+    }
+
+    .copies-badge {
+      font-size: 9px;
+      font-weight: 700;
+      opacity: 0.6;
+      flex-shrink: 0;
+    }
   `;
 
   private _dragging = false;
 
   render() {
     const typeLabel = this._getTypeLabel(this.asset.type);
+    const toolInfo = this.tools.length > 0 ? this.tools.join(', ') : this.asset.tool;
     return html`
       <div
-        class="chip ${this._dragging ? 'dragging' : ''}"
+        class="chip ${this._dragging ? 'dragging' : ''} ${this.disabled ? 'disabled' : ''}"
         data-type="${this.asset.type}"
-        draggable="true"
+        draggable="${!this.disabled}"
         @dragstart="${this._onDragStart}"
         @dragend="${this._onDragEnd}"
         @click="${this._onPreview}"
         @contextmenu="${this._onContextMenu}"
-        title="${this.asset.name} (${typeLabel})\n${this.asset.path}"
+        title="${this.asset.name} (${typeLabel}${toolInfo ? `, ${toolInfo}` : ''})${this.disabled ? '\nNot configured for the selected agent — use "Export to agent…" to enable it' : ''}\n${this.asset.path}"
       >
         <span class="type-badge">${typeLabel}</span>
         <span class="name">${this.asset.name}</span>
+        ${this.tools.map(t => html`<span class="tool-badge">${t}</span>`)}
+        ${this.copies > 1 ? html`<span class="copies-badge">×${this.copies}</span>` : ''}
+        ${this.hasUpdate ? iconUpdate('update-icon') : ''}
         <span class="chip-trailing" @click="${this._onDelete}" title="${this.asset.isSymlink ? 'Remove from repo' : 'Delete'}">
           ${this.diverged ? iconWarning('warn-icon') : this.asset.isSymlink ? iconLink('chain-icon') : ''}
           ${iconTrash(this.diverged || this.asset.isSymlink ? 'trash-icon' : 'local-trash')}
@@ -134,6 +179,10 @@ export class AssetChip extends LitElement {
   }
 
   private _onDragStart(e: DragEvent) {
+    if (this.disabled) {
+      e.preventDefault();
+      return;
+    }
     this._dragging = true;
     this.requestUpdate();
     e.dataTransfer!.setData('application/json', JSON.stringify(this.asset));
@@ -145,13 +194,8 @@ export class AssetChip extends LitElement {
     this.requestUpdate();
   }
 
-  private _onPreview(e: Event) {
+  private _onPreview(_e: Event) {
     this.dispatchEvent(new CustomEvent('preview-asset', { detail: this.asset, bubbles: true, composed: true }));
-  }
-
-  private _onOpen(e: Event) {
-    e.stopPropagation();
-    this.dispatchEvent(new CustomEvent('open-file', { detail: this.asset, bubbles: true, composed: true }));
   }
 
   private _onDelete(e: Event) {
@@ -174,12 +218,14 @@ export class AssetChip extends LitElement {
       'command': 'CMD',
       'agent': 'AGT',
       'rule': 'RUL',
+      'workflow': 'WFL',
       'script': 'SCR',
       'hook': 'HKS',
       'mcp-config': 'MCP',
       'output-style': 'STY',
       'settings': 'SET',
       'claude-md': 'MD',
+      'instructions': 'INS',
     };
     return labels[type];
   }

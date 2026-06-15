@@ -15,7 +15,8 @@ export interface LatticeConfig {
 export const DEFAULT_CONFIG: LatticeConfig = {
   roots: [],
   canonicalPaths: ['~/.assets', '~/.agents'],
-  globalPaths: ['~/.claude', '~/.cursor', '~/.github'],
+  // Note: ~/.agents is covered by canonicalPaths, so it is not listed here
+  globalPaths: ['~/.claude', '~/.cursor', '~/.github', '~/.codex', '~/.gemini'],
   maxDepth: 4,
   ignoreDirs: [
     'node_modules', '.git', 'dist', 'build', 'vendor',

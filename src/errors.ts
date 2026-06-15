@@ -9,7 +9,8 @@ export type CcmErrorCode =
   | 'CLONE_FAILED'
   | 'IMPORT_FAILED'
   | 'CONVERT_FAILED'
-  | 'MISSING_COPY_FN';
+  | 'MISSING_COPY_FN'
+  | 'AGENT_TYPE_UNSUPPORTED';
 
 export class CcmError extends Error {
   constructor(

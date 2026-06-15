@@ -109,3 +109,25 @@ export async function getHeadCommit(repoPath: string): Promise<string> {
   const { stdout } = await execFileAsync('git', ['rev-parse', 'HEAD'], { cwd: repoPath, timeout: 10_000 });
   return stdout.trim();
 }
+
+/** Get the checked-out branch name from a local git repository */
+export async function getCurrentBranch(repoPath: string): Promise<string> {
+  const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: repoPath, timeout: 10_000 });
+  return stdout.trim();
+}
+
+/** Resolve the remote head commit for a ref without cloning (git ls-remote) */
+export async function getRemoteHead(url: string, ref?: string): Promise<string | undefined> {
+  const parsed = parseGitHubUrl(url);
+  if (!parsed) return undefined;
+  const cloneUrl = buildCloneUrl(parsed);
+  const target = ref ?? parsed.branch;
+  const refArg = target ? `refs/heads/${target}` : 'HEAD';
+  try {
+    const { stdout } = await execFileAsync('git', ['ls-remote', cloneUrl, refArg], { timeout: 15_000 });
+    const hash = stdout.trim().split(/\s+/)[0];
+    return hash || undefined;
+  } catch {
+    return undefined;
+  }
+}

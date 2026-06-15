@@ -95,9 +95,11 @@ describe('CLI lifecycle', () => {
     await fs.mkdir(path.join(canonical, 'commands'), { recursive: true });
     await fs.writeFile(path.join(canonical, 'commands', 'deploy.md'), '# Deploy\nDeploy to production.');
 
-    // Create two repos
+    // Create two repos. A managed repo is identified by a context dir (.claude)
+    // alongside a .git dir, so every fixture repo needs both.
     for (const name of ['alpha', 'beta']) {
       const claudePath = path.join(workspace, name, '.claude');
+      await fs.mkdir(path.join(workspace, name, '.git'), { recursive: true });
       await fs.mkdir(path.join(claudePath, 'commands'), { recursive: true });
       await fs.mkdir(path.join(claudePath, 'rules'), { recursive: true });
       await fs.writeFile(path.join(claudePath, 'commands', 'build.md'), `# Build ${name}\nBuild the ${name} project.`);
@@ -144,6 +146,7 @@ describe('CLI lifecycle', () => {
 
   it('2. discovers a new repo when added', async () => {
     const gammaPath = path.join(workspace, 'gamma', '.claude', 'commands');
+    await fs.mkdir(path.join(workspace, 'gamma', '.git'), { recursive: true });
     await fs.mkdir(gammaPath, { recursive: true });
     await fs.writeFile(path.join(gammaPath, 'lint.md'), '# Lint\nRun linter.');
 

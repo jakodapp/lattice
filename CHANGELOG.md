@@ -2,6 +2,57 @@
 
 All notable changes to the Lattice Context Manager extension will be documented in this file.
 
+## [0.1.4] - 2026-06-15
+
+### Added
+- **Agent selector in the header** — `Lattice [Claude ▾] [Repositories] [Assets]`. The selected agent scopes every write flow: copy, move, install, GitHub import, and Add Repository all target the selected agent's config dir (e.g. `.cursor/`), using the export-rule matrix for renames (`.mdc`, `.prompt.md`) and format conversions (`.toml`)
+- First launch detects the host IDE (Cursor → Cursor, Antigravity → Gemini, otherwise Claude); manual choices persist per machine
+- Assets not usable by the selected agent render greyed-out and non-draggable; preview and context menu (including "Export to agent…") still work
+
+### Changed
+- Add Repository now creates only the selected agent's config dir (empty — subdirs are created lazily on first write) instead of `.claude/` with four subdirs
+- Antigravity merged into the Gemini entry (`.gemini`, `~/.gemini`) — they share one config; the incorrect `.agent` directory convention removed; Gemini now also scans project `rules/` and `workflows/`
+- Canonical installs to a convert-format target (e.g. a rule into Cursor) copy-convert instead of symlinking raw content
+
+### Removed
+- Windsurf, Cline, Roo Code, and Continue support — repos detectable only through those dirs disappear from the dashboard and reappear under "Discover repositories" as uninitialized
+- `latticeContextManager.defaultContextDir` setting — writes always target the selected agent's dir; a leftover user setting is ignored
+
+## [0.1.3] - 2026-06-11
+
+### Added
+- Multi-tool asset detection — assets from `.cursor/` (rules `.mdc`, commands, skills, agents), `.codex/` (skills, prompts), `.agents/` and legacy `.agent/` (Antigravity: skills, rules, workflows), `.github/` (Copilot instructions, prompts, agents, chatmodes, skills), `.windsurf/`, `.clinerules/`, `.roo/`, `.gemini/` are now first-class assets tagged with their owning tool
+- New asset types: `workflow` (Antigravity/Windsurf/Cline workflows) and `instructions` (root-level AGENTS.md, GEMINI.md, legacy `.cursorrules`/`.windsurfrules`/`.roorules`)
+- Repos with only a non-Claude context folder (e.g. `.codex/` or `.agents/`) are now discovered
+- `latticeContextManager.defaultContextDir` setting — new installs/copies write into `.agents/` (universal standard) by default, switchable to `.claude`
+- Global paths default expanded with `~/.codex` and `~/.gemini`; tool-specific global dirs are scanned with their own layout
+- "Install to Repo" button in the asset detail view, next to "Open in Editor"
+- GitHub update flow — background `git ls-remote` check on dashboard load marks imported assets with an update badge; an "Update" button re-clones the source, replaces installations, and records the new commit
+- Conflict handling on update — locally modified assets open a diff against upstream and ask per-instance to overwrite or keep
+- Detail panel file list now shows per-tool asset groups and non-Claude instruction files
+- Unreadable asset handling — assets with permission errors or broken symlinks get an `UNREADABLE_HASH` sentinel instead of crashing the scan
+- Warning icon (yellow triangle) on diverged assets in detail panel file list
+- `sourceUrl` displayed as a clickable link in the GitHub import asset picker header
+- Majority hash tie-breaking — when no single hash has the highest count, all instances show as modified
+
+### Changed
+- GitHub import now records the actual branch and subpath in the asset source metadata (previously hardcoded `main`)
+- Asset copy/install target paths resolve through the repo write target (`defaultContextDir`) instead of always `.claude/`
+- Diverged detection switched from `type::name` keys to path-based matching (`divergedPaths: Set<string>`)
+- Skills directory scanning now requires `SKILL.md` — loose files directly under `skills/` are skipped
+- Skill path resolution in dashboard panel handles `SKILL.md` suffix → parent directory lookup
+- Context menu for unreadable assets restricted to "Remove from repo" only
+- Group-level sync status in `buildAssetGroups` filters out `UNREADABLE_HASH` before comparison
+- `sourceUrl` link validated to start with `https://` before rendering as anchor
+
+### Fixed
+- Scanner crash when encountering unreadable files during hashing
+- Repo build failures silently halting the entire scan (now caught and logged)
+- Detail panel not refreshing after data reload when already open
+- Repository URLs in `package.json` updated to `jakodapp/lattice`
+- Assets symlinked from `.claude/` into another tool dir (e.g. `.agents/`) no longer appear twice — once as the symlink and once as the original — in both the kanban column and the detail panel file list
+- Detail panel action bar shows "Copy to Repo" for local assets and "Install to Repo" only for canonical/symlinked assets
+
 ## [0.1.2] - 2026-05-22
 
 ### Added

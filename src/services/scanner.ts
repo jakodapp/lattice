@@ -1,10 +1,10 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import { Asset, AssetType, ASSET_TYPE_DIRS, Repo } from '../types';
-import { SETTINGS_JSON, SETTINGS_LOCAL_JSON, CLAUDE_MD, MCP_SERVERS_JSON, CONTEXT_DIRS } from '../constants';
+import { SETTINGS_JSON, SETTINGS_LOCAL_JSON, CLAUDE_MD, AGENTS_MD, GEMINI_MD, LEGACY_INSTRUCTION_FILES, MCP_SERVERS_JSON, CONTEXT_DIRS, UNREADABLE_HASH } from '../constants';
 import { hashDirectory, hashFile } from './hasher';
-import { detectAgentsInRepo } from './agent-registry';
-import { enumerateAssetDir as enumerateRaw } from './asset-enumerator';
+import { detectAgentsInRepo, AGENT_REGISTRY, AgentDef } from './agent-registry';
+import { enumerateAssetDir as enumerateRaw, EnumeratedItem } from './asset-enumerator';
 import { isDirEntry, isFileEntry } from './fs-utils';
 import { expandHome } from './config';
 import type { LatticeConfig } from './config';
@@ -144,7 +144,19 @@ export class Scanner {
         assets: [],
         isGlobal: true,
       };
-      repo.assets = await this.enumerateAssets(repo);
+
+      // Tool-specific global dirs (e.g. ~/.cursor, ~/.codex) use their own layout;
+      // unmatched dirs fall back to the .claude-style enumeration
+      const agents = AGENT_REGISTRY.filter(a => a.globalDir === globalPath && a.id !== 'claude');
+      if (agents.length > 0) {
+        for (const agent of agents) {
+          repo.assets.push(...await this.enumerateAgentDirAssets(expanded, agent, repo.name));
+        }
+        repo.assets.push(...await this.enumerateInstructionFiles(expanded, repo.name, [AGENTS_MD, GEMINI_MD]));
+      } else {
+        repo.assets = await this.enumerateAssets(repo);
+      }
+
       if (repo.assets.length > 0) {
         results.push(repo);
       }
@@ -227,9 +239,13 @@ export class Scanner {
     }
 
     if (hasContextDir && hasGitDir) {
-      const repo = await this.buildRepo(dirPath);
-      if (repo) {
-        repos.push(repo);
+      try {
+        const repo = await this.buildRepo(dirPath);
+        if (repo) {
+          repos.push(repo);
+        }
+      } catch (err) {
+        console.debug(`[LCM] Failed to build repo "${dirPath}":`, err instanceof Error ? err.message : err);
       }
       return;
     }
@@ -265,8 +281,59 @@ export class Scanner {
     };
 
     repo.assets = await this.enumerateAssets(repo);
+    repo.assets.push(...await this.enumerateToolAssets(repo));
+    repo.assets.push(...await this.enumerateInstructionFiles(repoPath, repo.name, [CLAUDE_MD, AGENTS_MD, GEMINI_MD, ...LEGACY_INSTRUCTION_FILES]));
     repo.agents = await detectAgentsInRepo(repoPath);
     return repo;
+  }
+
+  /** Enumerate assets from every non-Claude tool config dir present in the repo */
+  private async enumerateToolAssets(repo: Repo): Promise<Asset[]> {
+    const assets: Asset[] = [];
+    for (const agent of AGENT_REGISTRY) {
+      if (agent.id === 'claude') continue;
+      const configDir = path.join(repo.path, agent.configDir);
+      try {
+        const stat = await fs.stat(configDir);
+        if (!stat.isDirectory()) continue;
+      } catch {
+        continue;
+      }
+      assets.push(...await this.enumerateAgentDirAssets(configDir, agent, repo.name));
+    }
+    return assets;
+  }
+
+  /** Enumerate one agent's config dir using its registered asset mappings */
+  private async enumerateAgentDirAssets(configDir: string, agent: AgentDef, repoName: string): Promise<Asset[]> {
+    const assets: Asset[] = [];
+    for (const mapping of agent.assetDirs) {
+      const dirPath = path.join(configDir, mapping.subdir);
+      const raw = await enumerateRaw(dirPath, mapping.type, 5, mapping.extensions);
+      for (const item of raw) {
+        assets.push(await this.enrichItem(item, repoName, agent.id));
+      }
+    }
+    return assets;
+  }
+
+  /** Detect root-level instruction files (CLAUDE.md, AGENTS.md, GEMINI.md, legacy rule files) */
+  private async enumerateInstructionFiles(basePath: string, repoName: string, fileNames: string[]): Promise<Asset[]> {
+    const assets: Asset[] = [];
+    for (const fileName of fileNames) {
+      const filePath = path.join(basePath, fileName);
+      try {
+        const stat = await fs.stat(filePath);
+        if (!stat.isFile()) continue;
+      } catch {
+        continue;
+      }
+      const hash = await hashFile(filePath).catch(() => UNREADABLE_HASH);
+      const type: AssetType = fileName === CLAUDE_MD ? 'claude-md' : 'instructions';
+      const name = fileName === CLAUDE_MD ? 'CLAUDE.md (root)' : fileName;
+      assets.push({ name, type, path: filePath, isDirectory: false, hash, repoName });
+    }
+    return assets;
   }
 
   private async enumerateAssets(repo: Repo): Promise<Asset[]> {
@@ -306,13 +373,6 @@ export class Scanner {
       }
     }
 
-    const rootClaudeMd = path.join(repo.path, CLAUDE_MD);
-    try {
-      await fs.access(rootClaudeMd);
-      const hash = await hashFile(rootClaudeMd);
-      assets.push({ name: 'CLAUDE.md (root)', type: 'claude-md', path: rootClaudeMd, isDirectory: false, hash, repoName: repo.name });
-    } catch { /* not present */ }
-
     return assets;
   }
 
@@ -320,21 +380,30 @@ export class Scanner {
   private async enumerateAssetDir(dirPath: string, assetType: AssetType, repoName: string): Promise<Asset[]> {
     const raw = await enumerateRaw(dirPath, assetType);
     const assets: Asset[] = [];
-
     for (const item of raw) {
-      const hash = item.isDirectory ? await hashDirectory(item.fullPath) : await hashFile(item.fullPath);
-      const sym = await detectSymlink(item.fullPath);
-      assets.push({
-        name: item.name,
-        type: item.type,
-        path: item.fullPath,
-        isDirectory: item.isDirectory,
-        hash,
-        repoName,
-        ...sym.isSymlink ? { isSymlink: true, canonicalPath: sym.canonicalPath } : {},
-      });
+      assets.push(await this.enrichItem(item, repoName));
     }
-
     return assets;
+  }
+
+  /** Build a full Asset from a raw enumerated item (hash, symlink info, owning tool) */
+  private async enrichItem(item: EnumeratedItem, repoName: string, tool?: string): Promise<Asset> {
+    let hash: string;
+    try {
+      hash = item.isDirectory ? await hashDirectory(item.fullPath) : await hashFile(item.fullPath);
+    } catch {
+      hash = UNREADABLE_HASH;
+    }
+    const sym = await detectSymlink(item.fullPath);
+    return {
+      name: item.name,
+      type: item.type,
+      path: item.fullPath,
+      isDirectory: item.isDirectory,
+      hash,
+      repoName,
+      ...tool ? { tool } : {},
+      ...sym.isSymlink ? { isSymlink: true, canonicalPath: sym.canonicalPath } : {},
+    };
   }
 }

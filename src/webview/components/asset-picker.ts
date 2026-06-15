@@ -7,6 +7,7 @@ export class AssetPicker extends LitElement {
   @property({ type: Boolean }) visible = false;
   @property({ type: Array }) assets: DiscoveredAssetSerialized[] = [];
   @property({ type: String }) repoName = '';
+  @property({ type: String }) sourceUrl = '';
 
   @state() private _selected = new Set<string>();
 
@@ -176,7 +177,9 @@ export class AssetPicker extends LitElement {
       <div class="modal ${this.visible ? 'open' : ''}">
         <div class="header">
           <div>
-            <div class="header-title">Import from ${this.repoName}</div>
+            <div class="header-title">Import from ${this.sourceUrl?.startsWith('https://')
+              ? html`<a href="${this.sourceUrl}" style="color: var(--vscode-textLink-foreground, #3794ff); text-decoration: none;">${this.sourceUrl.replace(/^https?:\/\//, '').replace(/\.git$/, '')}</a>`
+              : this.repoName}</div>
             <div class="header-sub">${this.assets.length} assets discovered</div>
           </div>
           <button class="close-btn" @click="${this._dismiss}">✕</button>

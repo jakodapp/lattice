@@ -1,15 +1,18 @@
 import { LitElement, html, css } from 'lit';
 import { customElement, query, state } from 'lit/decorators.js';
-import { FileEntry, FileGroup, SerializedAsset, SerializedRepo, DiscoveredAssetSerialized, VersionOption, ToExtension, ToWebview, ViewMode, HIDDEN_ASSET_TYPES, isContextFile } from '../types';
+import { AssetType, FileEntry, FileGroup, SerializedAsset, SerializedRepo, DiscoveredAssetSerialized, VersionOption, ToExtension, ToWebview, ViewMode, HIDDEN_ASSET_TYPES, isContextFile, computeDivergedPaths, GLOBAL_MERGED_NAME, DEFAULT_TOOL } from '../types';
 import { iconDownload, iconRefresh, iconFolderOpen, iconEyeOff } from '../icons';
+import { computeExportTargets, ExportTarget } from '../../services/agent-export-matrix';
 import './kanban-board';
 import './view-toggle';
 import './search-bar';
 import './detail-panel';
 import './context-menu';
+import './agent-select';
 import './repo-picker';
 import './asset-picker';
 import './version-picker';
+import './agent-picker';
 
 
 declare function acquireVsCodeApi(): { postMessage(msg: ToExtension): void; getState(): unknown; setState(s: unknown): void };
@@ -18,6 +21,9 @@ declare function acquireVsCodeApi(): { postMessage(msg: ToExtension): void; getS
 export class DashboardApp extends LitElement {
   @state() private _repos: SerializedRepo[] = [];
   @state() private _view: ViewMode = 'repo';
+  @state() private _selectedAgent = DEFAULT_TOOL;
+  /** Once the user picks an agent locally, in-flight refreshes must not clobber it */
+  private _agentTouched = false;
   @state() private _search = '';
   @state() private _detailOpen = false;
   @state() private _detailRepo: SerializedRepo | null = null;
@@ -35,6 +41,10 @@ export class DashboardApp extends LitElement {
   @state() private _assetPicker: { visible: boolean; repoName: string; clonePath: string; sourceUrl: string; assets: DiscoveredAssetSerialized[] } = { visible: false, repoName: '', clonePath: '', sourceUrl: '', assets: [] };
   @state() private _versionPicker: { visible: boolean; assetName: string; assetPath: string; assetRepoName: string; versions: VersionOption[] } = { visible: false, assetName: '', assetPath: '', assetRepoName: '', versions: [] };
   @state() private _pendingGithubInstall: { clonePath: string; sourceUrl: string; assetPaths: string[] } | null = null;
+  @state() private _updates: Array<{ name: string; type: AssetType; remoteCommit: string }> = [];
+  @state() private _viewingAsset: SerializedAsset | null = null;
+  @state() private _divergedPaths: Set<string> = new Set();
+  @state() private _agentPicker: { visible: boolean; asset: SerializedAsset | null; targets: ExportTarget[] } = { visible: false, asset: null, targets: [] };
 
   private _vscode = acquireVsCodeApi();
 
@@ -345,6 +355,27 @@ export class DashboardApp extends LitElement {
     this._vscode.postMessage({ type: 'refresh' });
   }
 
+
+
+  /** Paths of asset instances whose GitHub source has newer commits upstream */
+  private get _updatePaths(): Set<string> {
+    if (this._updates.length === 0) return new Set();
+    const keys = new Set(this._updates.map(u => `${u.type}::${u.name}`));
+    const paths = new Set<string>();
+    for (const r of this._repos) {
+      for (const a of r.assets) {
+        if (keys.has(`${a.type}::${a.name}`)) paths.add(a.path);
+      }
+    }
+    return paths;
+  }
+
+  private get _viewingUpdateAvailable(): boolean {
+    const asset = this._viewingAsset;
+    if (!asset) return false;
+    return this._updates.some(u => u.name === asset.name && u.type === asset.type);
+  }
+
   private get _uniqueAssetCount(): number {
     const hiddenTypes = HIDDEN_ASSET_TYPES;
     const seen = new Set<string>();
@@ -370,23 +401,15 @@ export class DashboardApp extends LitElement {
       return this._renderEmptyState();
     }
     return html`
-      <div class="toolbar">
-        <span class="toolbar-title">Lattice</span>
-        <view-toggle .view="${this._view}" .repoCount="${this._repos.length}" .assetCount="${this._uniqueAssetCount}" @view-change="${this._onViewChange}"></view-toggle>
-        <span class="spacer"></span>
-        <search-bar .value="${this._search}" @search-change="${this._onSearchChange}"></search-bar>
-        <button class="refresh-btn" @click="${this._importFromGithub}" title="Import from GitHub">
-          ${iconDownload()}
-        </button>
-        <button class="refresh-btn" @click="${this._refresh}" title="Refresh">
-          ${iconRefresh()}
-        </button>
-      </div>
+      ${this._renderToolbar()}
       <div class="board-container">
         <kanban-board
             .repos="${this._repos}"
             .view="${this._view}"
             .searchQuery="${this._search}"
+            .selectedAgent="${this._selectedAgent}"
+            .divergedPaths="${this._divergedPaths}"
+            .updatePaths="${this._updatePaths}"
             .selectedRepoName="${this._detailOpen && this._detailRepo ? this._detailRepo.name : ''}"
             @asset-drop="${this._onAssetDrop}"
             @column-header-click="${this._onColumnClick}"
@@ -405,6 +428,9 @@ export class DashboardApp extends LitElement {
         .claudeMdFiles="${this._detailClaudeMdFiles}"
         .navigateToFile="${this._navigateToFile}"
         .assetRepos="${this._assetRepos}"
+        .divergedPaths="${this._divergedPaths}"
+        .viewingAsset="${this._viewingAsset}"
+        .updateAvailable="${this._viewingUpdateAvailable}"
         @panel-close="${this._onPanelClose}"
         @open-file="${this._onOpenFile}"
         @open-project="${this._onOpenProject}"
@@ -413,7 +439,34 @@ export class DashboardApp extends LitElement {
         @delete-file="${this._onDeleteFile}"
         @show-context-menu="${this._onShowContextMenu}"
         @file-navigate="${this._onFileNavigate}"
+        @install-asset="${this._onInstallAsset}"
+        @update-asset="${this._onUpdateAsset}"
+        @export-asset="${this._onExportAsset}"
       ></detail-panel>
+      ${this._renderOverlays()}
+    `;
+  }
+
+  private _renderToolbar() {
+    return html`
+      <div class="toolbar">
+        <span class="toolbar-title">Lattice</span>
+        <agent-select .selected="${this._selectedAgent}" @agent-change="${this._onAgentChange}"></agent-select>
+        <view-toggle .view="${this._view}" .repoCount="${this._repos.length}" .assetCount="${this._uniqueAssetCount}" @view-change="${this._onViewChange}"></view-toggle>
+        <span class="spacer"></span>
+        <search-bar .value="${this._search}" @search-change="${this._onSearchChange}"></search-bar>
+        <button class="refresh-btn" @click="${this._importFromGithub}" title="Import from GitHub">
+          ${iconDownload()}
+        </button>
+        <button class="refresh-btn" @click="${this._refresh}" title="Refresh">
+          ${iconRefresh()}
+        </button>
+      </div>
+    `;
+  }
+
+  private _renderOverlays() {
+    return html`
       <context-menu
         .visible="${this._ctxMenu.visible}"
         .x="${this._ctxMenu.x}"
@@ -428,7 +481,15 @@ export class DashboardApp extends LitElement {
         @ctx-dismiss="${this._onCtxDismiss}"
         @ctx-diff="${this._onCtxDiff}"
         @ctx-convert-symlink="${this._onCtxConvertSymlink}"
+        @ctx-export-agents="${this._onCtxExportAgents}"
       ></context-menu>
+      <agent-picker
+        .visible="${this._agentPicker.visible}"
+        .asset="${this._agentPicker.asset}"
+        .targets="${this._agentPicker.targets}"
+        @agent-picker-confirm="${this._onAgentPickerConfirm}"
+        @agent-picker-dismiss="${this._onAgentPickerDismiss}"
+      ></agent-picker>
       <repo-picker
         .visible="${this._repoPicker.visible}"
         .action="${this._repoPicker.action}"
@@ -443,6 +504,7 @@ export class DashboardApp extends LitElement {
         .visible="${this._assetPicker.visible}"
         .assets="${this._assetPicker.assets}"
         .repoName="${this._assetPicker.repoName}"
+        .sourceUrl="${this._assetPicker.sourceUrl}"
         @asset-picker-confirm="${this._onAssetPickerConfirm}"
         @asset-picker-dismiss="${this._onAssetPickerDismiss}"
       ></asset-picker>
@@ -506,9 +568,12 @@ export class DashboardApp extends LitElement {
     switch (msg.type) {
       case 'init':
         this._repos = msg.repos;
+        this._divergedPaths = computeDivergedPaths(msg.repos);
         this._view = msg.view;
         this._hasRoots = msg.hasRoots;
+        if (!this._agentTouched) this._selectedAgent = msg.selectedAgent;
         this._loading = false;
+        this._vscode.postMessage({ type: 'check-updates' });
         // Auto-open current workspace repo detail
         if (msg.currentRepo) {
           this._vscode.postMessage({ type: 'open-detail', repoName: msg.currentRepo });
@@ -516,8 +581,17 @@ export class DashboardApp extends LitElement {
         break;
       case 'refresh':
         this._repos = msg.repos;
+        this._divergedPaths = computeDivergedPaths(msg.repos);
         this._hasRoots = msg.hasRoots;
+        if (!this._agentTouched) this._selectedAgent = msg.selectedAgent;
         this._loading = false;
+        this._vscode.postMessage({ type: 'check-updates' });
+        if (this._detailOpen && this._detailRepo) {
+          this._vscode.postMessage({ type: 'open-detail', repoName: this._detailRepo.name });
+        }
+        break;
+      case 'update-status':
+        this._updates = msg.updates;
         break;
       case 'detail':
         this._detailRepo = msg.repo;
@@ -539,6 +613,7 @@ export class DashboardApp extends LitElement {
         // For skill directories, use SKILL.md path so the renderer detects markdown
         const previewPath = msg.asset.isDirectory ? `${msg.asset.path}/SKILL.md` : msg.asset.path;
         this._navigateToFile = { name: msg.asset.name, path: previewPath, preview: msg.content };
+        this._viewingAsset = msg.asset;
         this._assetRepos = this._repos
           .filter(r => !r.isCanonical && r.assets.some(a => a.name === msg.asset.name && a.type === msg.asset.type))
           .map(r => r.name);
@@ -558,6 +633,12 @@ export class DashboardApp extends LitElement {
 
   private _onViewChange(e: CustomEvent<ViewMode>) {
     this._view = e.detail;
+  }
+
+  private _onAgentChange(e: CustomEvent<string>) {
+    this._selectedAgent = e.detail;
+    this._agentTouched = true;
+    this._vscode.postMessage({ type: 'set-agent', agentId: e.detail });
   }
 
   private _onSearchChange(e: CustomEvent<string>) {
@@ -590,6 +671,7 @@ export class DashboardApp extends LitElement {
   private _onPreviewFromKanban(e: CustomEvent<SerializedAsset>) {
     const asset = e.detail;
     this._navigateToFile = null;
+    this._viewingAsset = asset;
     this._assetRepos = this._repos
       .filter(r => !r.isCanonical && r.assets.some(a => a.name === asset.name && a.type === asset.type))
       .map(r => r.name);
@@ -625,6 +707,7 @@ export class DashboardApp extends LitElement {
   }
 
   private _onColumnContextMenu(e: CustomEvent<{ repoName: string; x: number; y: number }>) {
+    if (e.detail.repoName === GLOBAL_MERGED_NAME) { return; }
     const repo = this._repos.find(r => r.name === e.detail.repoName);
     this._repoCtx = { visible: true, x: e.detail.x, y: e.detail.y, repoName: e.detail.repoName, repoPath: repo?.path ?? '' };
   }
@@ -676,6 +759,30 @@ export class DashboardApp extends LitElement {
   private _onCtxConvertSymlink(e: CustomEvent<SerializedAsset>) {
     this._ctxMenu = { ...this._ctxMenu, visible: false };
     this._vscode.postMessage({ type: 'convert-to-symlink', assetPath: e.detail.path, assetRepoName: e.detail.repoName });
+  }
+
+  private _openAgentPicker(asset: SerializedAsset) {
+    const { targets } = computeExportTargets(asset, this._repos);
+    this._agentPicker = { visible: true, asset, targets };
+  }
+
+  private _onCtxExportAgents(e: CustomEvent<SerializedAsset>) {
+    this._ctxMenu = { ...this._ctxMenu, visible: false };
+    this._openAgentPicker(e.detail);
+  }
+
+  private _onExportAsset(e: CustomEvent<SerializedAsset>) {
+    this._openAgentPicker(e.detail);
+  }
+
+  private _onAgentPickerConfirm(e: CustomEvent<{ asset: SerializedAsset; targetAgentIds: string[] }>) {
+    const { asset, targetAgentIds } = e.detail;
+    this._agentPicker = { ...this._agentPicker, visible: false };
+    this._vscode.postMessage({ type: 'export-to-agents', assetPath: asset.path, assetRepoName: asset.repoName, targetAgentIds });
+  }
+
+  private _onAgentPickerDismiss() {
+    this._agentPicker = { ...this._agentPicker, visible: false };
   }
 
   private _onPickerConfirm(e: CustomEvent<{ action: string; asset: SerializedAsset; targetRepoNames: string[] }>) {
@@ -822,6 +929,7 @@ export class DashboardApp extends LitElement {
 
   private _onFileNavigate(e: CustomEvent<{ fileName: string; filePath: string }>) {
     const asset = this._detailRepo?.assets.find(a => a.name === e.detail.fileName || a.path === e.detail.filePath);
+    this._viewingAsset = asset && !isContextFile(asset) ? asset : null;
     if (!asset || isContextFile(asset)) {
       this._assetRepos = [];
       return;
@@ -840,6 +948,17 @@ export class DashboardApp extends LitElement {
     this._detailOpen = false;
     this._navigateToFile = null;
     this._assetRepos = [];
+    this._viewingAsset = null;
+  }
+
+  private _onInstallAsset(e: CustomEvent<SerializedAsset>) {
+    const asset = e.detail;
+    const action = asset.isCanonical ? 'install' as const : 'copy' as const;
+    this._repoPicker = { visible: true, action, asset };
+  }
+
+  private _onUpdateAsset(e: CustomEvent<SerializedAsset>) {
+    this._vscode.postMessage({ type: 'update-asset', assetName: e.detail.name, assetType: e.detail.type });
   }
 
   private _onForgetRepo(e: CustomEvent<{ repoName: string }>) {

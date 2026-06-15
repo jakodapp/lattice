@@ -22,17 +22,31 @@ async function hasSkillMd(dirPath: string): Promise<boolean> {
   }
 }
 
+const DEFAULT_EXTENSIONS = ['.md', '.js'];
+
+/** Match a file name against accepted suffixes (longest first); returns the stripped name or undefined */
+function matchExtension(fileName: string, extensions: string[]): string | undefined {
+  const sorted = [...extensions].sort((a, b) => b.length - a.length);
+  for (const ext of sorted) {
+    if (fileName.toLowerCase().endsWith(ext.toLowerCase()) && fileName.length > ext.length) {
+      return fileName.slice(0, -ext.length);
+    }
+  }
+  return undefined;
+}
+
 /**
  * Walk an asset-type directory and yield discovered items.
  * Skills are identified by the presence of SKILL.md — directories without it
  * are treated as category folders and recursed into.
  * Non-skill directories recurse (e.g. rules can be nested).
- * Files must end in .md or .js.
+ * Files must match one of the accepted extensions (default .md / .js).
  */
 export async function enumerateAssetDir(
   dirPath: string,
   assetType: AssetType,
   maxDepth: number = 5,
+  extensions: string[] = DEFAULT_EXTENSIONS,
 ): Promise<EnumeratedItem[]> {
   if (maxDepth <= 0) return [];
 
@@ -58,14 +72,17 @@ export async function enumerateAssetDir(
       if (assetType === 'skill' && await hasSkillMd(fullPath)) {
         items.push({ name: entry.name, type: assetType, fullPath, isDirectory: true });
       } else {
-        const nested = await enumerateAssetDir(fullPath, assetType, maxDepth - 1);
+        const nested = await enumerateAssetDir(fullPath, assetType, maxDepth - 1, extensions);
         items.push(...nested);
       }
-    } else if (assetType !== 'skill' && (entry.isFile() || entry.isSymbolicLink()) && (entry.name.endsWith('.md') || entry.name.endsWith('.js'))) {
-      const name = entry.name.replace(/\.(md|js)$/, '');
-      items.push({ name, type: assetType, fullPath, isDirectory: false });
+    } else if (assetType !== 'skill' && (entry.isFile() || entry.isSymbolicLink())) {
+      const name = matchExtension(entry.name, extensions);
+      if (name !== undefined) {
+        items.push({ name, type: assetType, fullPath, isDirectory: false });
+      }
     }
   }
 
   return items;
 }
+

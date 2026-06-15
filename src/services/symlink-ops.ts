@@ -2,7 +2,8 @@ import * as fs from 'fs/promises';
 import * as path from 'path';
 import { Asset, Repo } from '../types';
 import { CcmError } from '../errors';
-import { getTargetPath } from './path-resolver';
+import { getWriteTarget } from './path-resolver';
+import type { AgentDef } from './agent-defs';
 
 import { expandHome } from './config';
 
@@ -85,23 +86,26 @@ export async function createRelativeSymlink(targetPath: string, linkPath: string
 export async function installAsset(
   asset: Asset,
   targetRepo: Repo,
-  options: { canonicalBase?: string | string[]; copyFn?: (a: Asset, r: Repo) => Promise<string> } = {},
+  options: { canonicalBase?: string | string[]; copyFn?: (a: Asset, r: Repo, agent?: AgentDef) => Promise<string>; agent?: AgentDef } = {},
 ): Promise<InstallResult> {
   const canonicalBases = options.canonicalBase
     ? (Array.isArray(options.canonicalBase) ? options.canonicalBase : [options.canonicalBase])
     : [];
-  const targetPath = getTargetPath(asset, targetRepo);
+  const { targetPath, rule } = getWriteTarget(asset, targetRepo, options.agent);
   if (!options.copyFn) {
     throw new CcmError('installAsset requires copyFn option', 'MISSING_COPY_FN', {});
   }
   const doCopy = options.copyFn;
 
-  // Resolve canonical source — symlinked assets point back to their origin
+  // Resolve canonical source — symlinked assets point back to their origin.
+  // Convert-method targets (e.g. cursor .mdc) must copy-convert, never symlink raw content.
   const sourcePath = asset.canonicalPath ?? asset.path;
-  const shouldSymlink = canonicalBases.length > 0 && isCanonicalPath(sourcePath, canonicalBases);
+  const shouldSymlink = canonicalBases.length > 0
+    && isCanonicalPath(sourcePath, canonicalBases)
+    && rule?.method !== 'convert';
 
   if (!shouldSymlink) {
-    await doCopy(asset, targetRepo);
+    await doCopy(asset, targetRepo, options.agent);
     return { mode: 'copy', targetPath };
   }
 
@@ -118,7 +122,7 @@ export async function installAsset(
 
   // Symlink failed — fall back to copy
   try {
-    await doCopy(asset, targetRepo);
+    await doCopy(asset, targetRepo, options.agent);
     return { mode: 'copy', targetPath, symlinkFailed: true };
   } catch (err) {
     throw new CcmError(

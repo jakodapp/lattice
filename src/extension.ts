@@ -20,6 +20,8 @@ import { updateAllOutdated } from './commands/update-all-outdated';
 import { installToSelected } from './commands/install-to-selected';
 import { DashboardPanel } from './providers/dashboard-panel';
 import { openProject } from './commands/open-project';
+import { detectHostAgentId } from './services/agent-defs';
+import { AgentSelection } from './services/agent-selection';
 
 export interface ConfigStore {
   repos: Repo[];
@@ -52,6 +54,10 @@ function getGroupOrAsset(arg: unknown): Asset | AssetGroup | undefined {
 
 export function activate(context: vscode.ExtensionContext) {
   const store: ConfigStore = { repos: [], assetGroups: [] };
+  const agentSelection = new AgentSelection(
+    context.globalState,
+    detectHostAgentId(vscode.env.appName, vscode.env.uriScheme),
+  );
 
   const statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 0);
   statusBar.command = 'lcm.openDashboard';
@@ -151,7 +157,7 @@ export function activate(context: vscode.ExtensionContext) {
     }),
 
     vscode.commands.registerCommand('lcm.openDashboard', () => {
-      DashboardPanel.createOrShow(context.extensionUri, store, refresh);
+      DashboardPanel.createOrShow(context.extensionUri, store, refresh, agentSelection);
     }),
 
     vscode.commands.registerCommand('lcm.openProject', (arg: unknown) => {
@@ -169,7 +175,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     vscode.commands.registerCommand('lcm.importFromGithub', () => {
-      DashboardPanel.createOrShow(context.extensionUri, store, refresh);
+      DashboardPanel.createOrShow(context.extensionUri, store, refresh, agentSelection);
       // The dashboard panel handles the import flow via webview messages
     }),
   );

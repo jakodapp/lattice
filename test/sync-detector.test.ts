@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import * as assert from 'node:assert/strict';
 import { buildAssetGroups, groupByType, getInstanceStatus } from '../src/services/sync-detector';
+import { findMajorityHash, UNREADABLE_HASH } from '../src/constants';
 import { Asset, AssetGroup } from '../src/types';
 
 function makeAsset(overrides: Partial<Asset> = {}): Asset {
@@ -106,5 +107,82 @@ describe('getInstanceStatus', () => {
     const group: AssetGroup = { name: 'x', type: 'command', instances: [a, b, c], syncStatus: 'diverged' };
 
     assert.equal(getInstanceStatus(c, group), 'modified');
+  });
+
+  it('returns modified for unreadable assets', () => {
+    const a = makeAsset({ repoName: 'a', hash: 'aaa' });
+    const b = makeAsset({ repoName: 'b', hash: UNREADABLE_HASH });
+    const group: AssetGroup = { name: 'x', type: 'command', instances: [a, b], syncStatus: 'diverged' };
+
+    assert.equal(getInstanceStatus(b, group), 'modified');
+  });
+
+  it('ignores unreadable hashes when computing majority', () => {
+    const a = makeAsset({ repoName: 'a', hash: 'aaa' });
+    const b = makeAsset({ repoName: 'b', hash: 'aaa' });
+    const c = makeAsset({ repoName: 'c', hash: UNREADABLE_HASH });
+    const group: AssetGroup = { name: 'x', type: 'command', instances: [a, b, c], syncStatus: 'diverged' };
+
+    assert.equal(getInstanceStatus(a, group), 'synced');
+    assert.equal(getInstanceStatus(b, group), 'synced');
+  });
+
+  it('returns modified for all instances when hashes are tied', () => {
+    const a = makeAsset({ repoName: 'a', hash: 'v1' });
+    const b = makeAsset({ repoName: 'b', hash: 'v2' });
+    const group: AssetGroup = { name: 'x', type: 'command', instances: [a, b], syncStatus: 'diverged' };
+
+    assert.equal(getInstanceStatus(a, group), 'modified');
+    assert.equal(getInstanceStatus(b, group), 'modified');
+  });
+
+  it('returns modified for three-way tie', () => {
+    const a = makeAsset({ repoName: 'a', hash: 'v1' });
+    const b = makeAsset({ repoName: 'b', hash: 'v2' });
+    const c = makeAsset({ repoName: 'c', hash: 'v3' });
+    const group: AssetGroup = { name: 'x', type: 'command', instances: [a, b, c], syncStatus: 'diverged' };
+
+    assert.equal(getInstanceStatus(a, group), 'modified');
+    assert.equal(getInstanceStatus(b, group), 'modified');
+    assert.equal(getInstanceStatus(c, group), 'modified');
+  });
+
+  it('returns modified when all instances are unreadable', () => {
+    const a = makeAsset({ repoName: 'a', hash: UNREADABLE_HASH });
+    const b = makeAsset({ repoName: 'b', hash: UNREADABLE_HASH });
+    const group: AssetGroup = { name: 'x', type: 'command', instances: [a, b], syncStatus: 'diverged' };
+
+    assert.equal(getInstanceStatus(a, group), 'modified');
+    assert.equal(getInstanceStatus(b, group), 'modified');
+  });
+});
+
+describe('findMajorityHash', () => {
+  it('returns the majority hash when one exists', () => {
+    assert.equal(findMajorityHash(['a', 'a', 'b']), 'a');
+  });
+
+  it('returns null when hashes are tied', () => {
+    assert.equal(findMajorityHash(['a', 'b']), null);
+  });
+
+  it('returns null for three-way tie', () => {
+    assert.equal(findMajorityHash(['a', 'b', 'c']), null);
+  });
+
+  it('ignores unreadable hashes', () => {
+    assert.equal(findMajorityHash([UNREADABLE_HASH, 'a', 'a']), 'a');
+  });
+
+  it('returns null when all hashes are unreadable', () => {
+    assert.equal(findMajorityHash([UNREADABLE_HASH, UNREADABLE_HASH]), null);
+  });
+
+  it('returns null for empty input', () => {
+    assert.equal(findMajorityHash([]), null);
+  });
+
+  it('returns the sole readable hash as majority', () => {
+    assert.equal(findMajorityHash([UNREADABLE_HASH, 'a']), 'a');
   });
 });

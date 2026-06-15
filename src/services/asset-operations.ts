@@ -1,4 +1,5 @@
 import { Asset, Repo } from '../types';
+import type { AgentDef } from './agent-defs';
 import { getErrorMessage } from '../constants';
 import { deleteAsset } from './file-ops';
 import { installAsset } from './symlink-ops';
@@ -54,13 +55,15 @@ export function getDeleteWarning(opts: {
 
 interface InstallOptions {
   canonicalBase: string | string[];
+  /** Working agent whose config dir receives the asset; undefined = .claude */
+  agent?: AgentDef;
 }
 
 /** Install an asset to multiple repos, collecting results */
 async function installToMultipleRepos(
   asset: Asset,
   targetRepos: Repo[],
-  options: { canonicalBase: string | string[] },
+  options: InstallOptions,
   verb: string,
 ): Promise<OperationResult<{ successCount: number }>> {
   let successCount = 0;
@@ -111,8 +114,9 @@ export function installCanonicalToRepos(
   asset: Asset,
   targetRepos: Repo[],
   canonicalBase: string | string[],
+  agent?: AgentDef,
 ): Promise<OperationResult<{ successCount: number }>> {
-  return installToMultipleRepos(asset, targetRepos, { canonicalBase }, 'install');
+  return installToMultipleRepos(asset, targetRepos, { canonicalBase, agent }, 'install');
 }
 
 /** Find repos that have symlinks pointing to the given canonical asset */
